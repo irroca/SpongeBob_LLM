@@ -1,7 +1,6 @@
 import json
 from torch.utils.data import Dataset, DataLoader
 import torch
-from sklearn.model_selection import train_test_split
 
 class PretrainDataset(Dataset):
     def __init__(self, data_path, tokenizer, max_length=512):
@@ -156,8 +155,8 @@ class SFTDataset(Dataset):
                     if input_ids[end:end + len(self.eos_id)] == self.eos_id:
                         break
                     end += 1
-                # 将开始标记之后到结束标记位置之间的 token 标记为 1（参与损失计算）
-                for j in range(start + 1, min(end + len(self.eos_id) + 1, self.max_length)):
+                # 将助手回复内容（含结尾 eos）标记为 1；从 start 起，不再跳过首 token
+                for j in range(start, min(end + len(self.eos_id) + 1, self.max_length)):
                     loss_mask[j] = 1
                 # 更新索引：跳过整个对话部分（包括结束标记）
                 i = end + len(self.eos_id) if end < len(input_ids) else len(input_ids)
