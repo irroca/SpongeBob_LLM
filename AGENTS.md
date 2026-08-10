@@ -45,8 +45,8 @@ rather than duplicating commands here.
 - **`chat.py` is an interactive REPL** (`input()`), so pipe input for non-interactive runs, e.g.
   `printf 'question\nquit\n' | python3 chat.py --save_dir results --model_mode 1 --device cpu`.
   `--model_mode` selects the checkpoint: 0=`pretrain*.pth`, 1=`sft*.pth`, 2=`distill*.pth`,
-  3=`dpo*.pth`, and it falls back to `*_final.pth` filenames. `--save_dir` defaults to
-  `sample_pth` (nonexistent); point it at `results`.
+  3=`dpo*.pth`, and it falls back to `*_final.pth` filenames. `--save_dir` already defaults to
+  `results`, matching the other stages' `--save_dir results`.
 - **`--use_wandb True` requires `swanlab`** (imported lazily, not installed by default). Leave
   wandb off unless you install it.
 - Installed with a recent major `transformers` (5.x) and `torch` 2.x CPU; the model code (custom
