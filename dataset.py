@@ -3,21 +3,38 @@ from torch.utils.data import Dataset, DataLoader
 import torch
 
 
-def assistant_loss_mask(input_ids, bos_id, eos_id, max_length):
-    """Mark tokens inside <s>assistant\\n ... </s>\\n spans as 1."""
+def assistant_loss_mask(input_ids, bos_id, eos_id, max_length, pad_token_id=0):
+    """Mark tokens inside <s>assistant\\n ... </s>\\n spans as 1.
+
+    Rules:
+      - Mark from the first assistant content token through the end of the
+        </s>\\n span, inclusive.
+      - Never mark pad_token_id positions.
+      - If no eos is found (truncated), mark content start .. last non-pad
+        index only.
+    """
     loss_mask = [0] * len(input_ids)
     i = 0
     while i < len(input_ids):
         if input_ids[i : i + len(bos_id)] == bos_id:
             start = i + len(bos_id)
             end = start
+            found_eos = False
             while end < len(input_ids):
                 if input_ids[end : end + len(eos_id)] == eos_id:
+                    found_eos = True
                     break
                 end += 1
-            for j in range(start, min(end + len(eos_id) + 1, max_length)):
-                loss_mask[j] = 1
-            i = end + len(eos_id) if end < len(input_ids) else len(input_ids)
+            if found_eos:
+                span_end = min(end + len(eos_id), max_length)
+            else:
+                span_end = min(end, max_length)
+                while span_end > start and input_ids[span_end - 1] == pad_token_id:
+                    span_end -= 1
+            for j in range(start, span_end):
+                if input_ids[j] != pad_token_id:
+                    loss_mask[j] = 1
+            i = end + len(eos_id) if found_eos else len(input_ids)
         else:
             i += 1
     return loss_mask
@@ -152,7 +169,9 @@ class SFTDataset(Dataset):
         )
     
     def _generate_loss_mask(self, input_ids):
-        return assistant_loss_mask(input_ids, self.bos_id, self.eos_id, self.max_length)
+        return assistant_loss_mask(
+            input_ids, self.bos_id, self.eos_id, self.max_length, self.tokenizer.pad_token_id
+        )
     
     def __getitem__(self, index):
         # 获取对应索引的样本
@@ -205,7 +224,9 @@ class PreferenceDataset(Dataset):
         )
         input_ids = self.tokenizer(text).input_ids[: self.max_length]
         input_ids += [self.tokenizer.pad_token_id] * (self.max_length - len(input_ids))
-        loss_mask = assistant_loss_mask(input_ids, self.bos_id, self.eos_id, self.max_length)
+        loss_mask = assistant_loss_mask(
+            input_ids, self.bos_id, self.eos_id, self.max_length, self.tokenizer.pad_token_id
+        )
         X = torch.tensor(input_ids[:-1], dtype=torch.long)
         Y = torch.tensor(input_ids[1:], dtype=torch.long)
         loss_mask = torch.tensor(loss_mask[1:], dtype=torch.long)
