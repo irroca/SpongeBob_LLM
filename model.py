@@ -270,22 +270,25 @@ class SpongeBob(PreTrainedModel):
                  stream=False, repetition_penalty=1., use_cache=True, pad_token_id=0, **kwargs):
           if stream:
               return self._stream_generate(input_ids, eos_token_id, max_new_tokens, temperature, top_p, 
-                                         repetition_penalty, use_cache, **kwargs)
+                                         repetition_penalty, use_cache, pad_token_id=pad_token_id, **kwargs)
           else:
               # 一次性生成所有token
               result = []
               for token in self._stream_generate(input_ids, eos_token_id, max_new_tokens, temperature, top_p,
-                                               repetition_penalty, use_cache, **kwargs):
+                                               repetition_penalty, use_cache, pad_token_id=pad_token_id, **kwargs):
                   result.append(token)
               return result[-1] if result else input_ids
      
      # 内部流式生成函数
      def _stream_generate(self, input_ids, eos_token_id, max_new_tokens, temperature, top_p, 
-                         repetition_penalty, use_cache, **kwargs):
+                         repetition_penalty, use_cache, pad_token_id=0, **kwargs):
         start_len = input_ids.shape[1]
         total_len = start_len
         past_key_values = None
         first_seq = True
+        bsz = input_ids.shape[0]
+        # 每行是否已经生成过结束符（批量安全：不能对多元素张量调用.item()）
+        finished = torch.zeros(bsz, dtype=torch.bool, device=input_ids.device)
         
         # 修正循环条件：生成不超过max_new_tokens个新token
         for _ in range(max_new_tokens):
@@ -341,6 +344,12 @@ class SpongeBob(PreTrainedModel):
                 # 贪婪解码
                 input_ids_next = torch.argmax(logits, dim=-1, keepdim=True)
             
+            # 已经结束的行，本步强制输出pad_token_id，未结束的行保留采样结果
+            # （对刚刚命中结束符的行，本步仍输出真实的结束符token，从下一步才开始pad）
+            if finished.any():
+                pad_fill = torch.full_like(input_ids_next, pad_token_id)
+                input_ids_next = torch.where(finished.unsqueeze(-1), pad_fill, input_ids_next)
+
             # 将新token拼接到已有序列上
             input_ids = torch.cat((input_ids, input_ids_next), dim=1)
             total_len += 1
@@ -348,6 +357,9 @@ class SpongeBob(PreTrainedModel):
             # 生成器返回新生成部分
             yield input_ids[:, start_len:]
             
-            # 若生成的token为结束符，则停止生成
-            if input_ids_next.item() == eos_token_id:
+            # 更新每行的结束状态（批量安全：逐元素比较，不对多元素张量调用.item()）
+            finished = finished | (input_ids_next.squeeze(-1) == eos_token_id)
+            
+            # 所有行都已结束，则停止生成
+            if finished.all():
                 break
