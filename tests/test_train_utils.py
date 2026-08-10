@@ -48,16 +48,16 @@ def test_flush_pending_grads_leftover_accum_boundary_not_hit():
     assert torch.any(model.weight.grad != 0)
     assert pending is True
 
-    pending = flush_pending_grads(model, optimizer, scaler=None, grad_clip=1.0, pending=pending)
+    flushed = flush_pending_grads(model, optimizer, scaler=None, grad_clip=1.0, pending=pending)
 
-    assert pending is False
+    assert flushed is True
     assert model.weight.grad is None
 
 
 def test_flush_pending_grads_noop_when_not_pending():
     model, optimizer = _tiny_model_and_optimizer()
-    result = flush_pending_grads(model, optimizer, scaler=None, grad_clip=1.0, pending=False)
-    assert result is False
+    flushed = flush_pending_grads(model, optimizer, scaler=None, grad_clip=1.0, pending=False)
+    assert flushed is False
 
 
 def test_optimizer_step_clips_grad_norm():

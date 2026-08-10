@@ -97,12 +97,12 @@ def flush_pending_grads(
     pending: bool,
 ) -> bool:
     """If ``pending`` (leftover grads from a partial accumulation window at epoch end),
-    run ``optimizer_step`` and return ``False``. Otherwise return ``pending`` unchanged.
+    run ``optimizer_step`` and return ``True`` (flushed). Otherwise return ``False``.
     """
     if pending:
         optimizer_step(model, optimizer, scaler, grad_clip)
-        return False
-    return pending
+        return True
+    return False
 
 
 def save_checkpoint(

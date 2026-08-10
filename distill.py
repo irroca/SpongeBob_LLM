@@ -101,7 +101,7 @@ def train_epoch(epoch, start_step, global_step, student, teacher, optimizer, sca
                 args.lm_config,
             )
 
-    if not flush_pending_grads(student, optimizer, scaler, args.grad_clip, pending) and pending:
+    if flush_pending_grads(student, optimizer, scaler, args.grad_clip, pending):
         global_step += 1
     return global_step, current_loss
 
