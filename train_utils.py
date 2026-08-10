@@ -70,6 +70,40 @@ def get_lr(
     return min_lr + 0.5 * (lr - min_lr) * (1.0 + math.cos(math.pi * progress))
 
 
+def optimizer_step(
+    model: nn.Module,
+    optimizer: optim.Optimizer,
+    scaler: Any,
+    grad_clip: float,
+) -> None:
+    """Unscale (if scaler), clip grad norm, step, update, zero_grad."""
+    if scaler is not None:
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        scaler.step(optimizer)
+        scaler.update()
+    else:
+        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        optimizer.step()
+    optimizer.zero_grad(set_to_none=True)
+
+
+def flush_pending_grads(
+    model: nn.Module,
+    optimizer: optim.Optimizer,
+    scaler: Any,
+    grad_clip: float,
+    pending: bool,
+) -> bool:
+    """If ``pending`` (leftover grads from a partial accumulation window at epoch end),
+    run ``optimizer_step`` and return ``False``. Otherwise return ``pending`` unchanged.
+    """
+    if pending:
+        optimizer_step(model, optimizer, scaler, grad_clip)
+        return False
+    return pending
+
+
 def save_checkpoint(
     path: str,
     model: nn.Module,

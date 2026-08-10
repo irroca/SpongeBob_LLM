@@ -16,9 +16,11 @@ from losses import kd_loss, masked_cross_entropy
 from model import SpongeBob
 from train_utils import (
     build_autocast_scaler,
+    flush_pending_grads,
     get_lr,
     load_train_state,
     load_weights,
+    optimizer_step,
     save_checkpoint,
     set_seed,
 )
@@ -27,6 +29,8 @@ from train_utils import (
 def train_epoch(epoch, start_step, global_step, student, teacher, optimizer, scaler, loader, args, ctx):
     student.train()
     teacher.eval()
+    pending = False
+    current_loss = 0.0
     for step, (X, Y, loss_mask) in enumerate(loader):
         if step < start_step:
             continue
@@ -57,22 +61,17 @@ def train_epoch(epoch, start_step, global_step, student, teacher, optimizer, sca
         else:
             loss.backward()
 
+        current_loss = loss.item() * args.accumulation_steps
+        pending = True
         if (step + 1) % args.accumulation_steps == 0:
-            if scaler is not None:
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(student.parameters(), args.grad_clip)
-                scaler.step(optimizer)
-                scaler.update()
-            else:
-                torch.nn.utils.clip_grad_norm_(student.parameters(), args.grad_clip)
-                optimizer.step()
-            optimizer.zero_grad(set_to_none=True)
+            optimizer_step(student, optimizer, scaler, args.grad_clip)
+            pending = False
             global_step += 1
 
         if step % args.log_step == 0:
             print(
                 f"Epoch[{epoch+1}/{args.epochs}] ({step}/{len(loader)}) "
-                f"loss={loss.item() * args.accumulation_steps:.4f} "
+                f"loss={current_loss:.4f} "
                 f"ce={ce.item():.4f} kd={kd.item():.4f} lr={optimizer.param_groups[-1]['lr']:.7f} "
                 f"global_step={global_step}"
             )
@@ -86,11 +85,13 @@ def train_epoch(epoch, start_step, global_step, student, teacher, optimizer, sca
                 epoch,
                 step,
                 global_step,
-                loss.item() * args.accumulation_steps,
+                current_loss,
                 args.lm_config,
             )
 
-    return global_step
+    if not flush_pending_grads(student, optimizer, scaler, args.grad_clip, pending) and pending:
+        global_step += 1
+    return global_step, current_loss
 
 
 def main():
@@ -147,14 +148,14 @@ def main():
 
     print(f"KD: alpha={args.alpha} T={args.temperature} steps={args.total_steps}")
     for epoch in range(start_epoch, args.epochs):
-        global_step = train_epoch(
+        global_step, last_loss = train_epoch(
             epoch, start_step if epoch == start_epoch else 0,
             global_step, student, teacher, optimizer, scaler, loader, args, ctx,
         )
         start_step = 0
         save_checkpoint(
             f"{args.save_dir}/epoch_{epoch+1}_checkpoint.pth",
-            student, optimizer, scaler, epoch + 1, 0, global_step, 0.0, args.lm_config,
+            student, optimizer, scaler, epoch + 1, 0, global_step, last_loss, args.lm_config,
         )
 
     final_path = f"{args.save_dir}/distill_final.pth"

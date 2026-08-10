@@ -16,9 +16,11 @@ from losses import masked_cross_entropy
 from model import SpongeBob
 from train_utils import (
     build_autocast_scaler,
+    flush_pending_grads,
     get_lr,
     load_train_state,
     load_weights,
+    optimizer_step,
     save_checkpoint,
     set_seed,
     str2bool,
@@ -27,6 +29,8 @@ from train_utils import (
 
 def train_epoch(epoch, start_step, global_step, model, optimizer, scaler, loader, args, ctx, wandb):
     model.train()
+    pending = False
+    current_loss = 0.0
     for step, (X, Y, loss_mask) in enumerate(loader):
         if step < start_step:
             continue
@@ -45,16 +49,10 @@ def train_epoch(epoch, start_step, global_step, model, optimizer, scaler, loader
             loss.backward()
 
         current_loss = loss.item() * args.accumulation_steps
+        pending = True
         if (step + 1) % args.accumulation_steps == 0:
-            if scaler is not None:
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
-                scaler.step(optimizer)
-                scaler.update()
-            else:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
-                optimizer.step()
-            optimizer.zero_grad(set_to_none=True)
+            optimizer_step(model, optimizer, scaler, args.grad_clip)
+            pending = False
             global_step += 1
 
         if step % args.log_step == 0:
@@ -71,7 +69,10 @@ def train_epoch(epoch, start_step, global_step, model, optimizer, scaler, loader
                 f"{args.save_dir}/latest_checkpoint.pth",
                 model, optimizer, scaler, epoch, step, global_step, current_loss, args.lm_config,
             )
-    return global_step
+
+    if not flush_pending_grads(model, optimizer, scaler, args.grad_clip, pending) and pending:
+        global_step += 1
+    return global_step, current_loss
 
 
 def main():
@@ -122,14 +123,14 @@ def main():
     args.total_steps = max(1, args.epochs * len(loader) // args.accumulation_steps)
 
     for epoch in range(start_epoch, args.epochs):
-        global_step = train_epoch(
+        global_step, last_loss = train_epoch(
             epoch, start_step if epoch == start_epoch else 0,
             global_step, model, optimizer, scaler, loader, args, ctx, wandb,
         )
         start_step = 0
         save_checkpoint(
             f"{args.save_dir}/epoch_{epoch+1}_checkpoint.pth",
-            model, optimizer, scaler, epoch + 1, 0, global_step, 0.0, args.lm_config,
+            model, optimizer, scaler, epoch + 1, 0, global_step, last_loss, args.lm_config,
         )
 
     torch.save(model.state_dict(), f"{args.save_dir}/pretrain_final.pth")
