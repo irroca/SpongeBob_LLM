@@ -15,15 +15,16 @@ from dataset import SFTDataset
 from losses import masked_cross_entropy
 from model import SpongeBob
 from train_utils import (
+    add_common_train_args,
     build_autocast_scaler,
     flush_pending_grads,
     get_lr,
+    init_wandb_if_needed,
     load_train_state,
     load_weights,
     optimizer_step,
     save_checkpoint,
     set_seed,
-    str2bool,
 )
 
 
@@ -77,24 +78,13 @@ def train_epoch(epoch, start_step, global_step, model, optimizer, scaler, loader
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--save_dir", type=str, default="results")
-    parser.add_argument("--epochs", type=int, default=1)
-    parser.add_argument("--batch_size", type=int, default=8)
-    parser.add_argument("--learning_rate", type=float, default=1e-4)
-    parser.add_argument("--device", type=str, default="cuda:0" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--use_wandb", type=str2bool, default=False)
-    parser.add_argument("--dtype", type=str, default="float32")
-    parser.add_argument("--wandb_project", type=str, default="SpongeBob-SFT")
-    parser.add_argument("--num_workers", type=int, default=0)
-    parser.add_argument("--accumulation_steps", type=int, default=1)
-    parser.add_argument("--grad_clip", type=float, default=1.0)
-    parser.add_argument("--log_step", type=int, default=10)
-    parser.add_argument("--save_step", type=int, default=1000)
-    parser.add_argument("--max_seq_len", type=int, default=512)
-    parser.add_argument("--data_path", type=str, default="datasets/sft_512.jsonl")
+    add_common_train_args(
+        parser,
+        learning_rate=1e-4,
+        wandb_project="SpongeBob-SFT",
+        data_path="datasets/sft_512.jsonl",
+    )
     parser.add_argument("--pretrained_path", type=str, default="./results/pretrain_final.pth")
-    parser.add_argument("--resume_from", type=str, default=None)
-    parser.add_argument("--seed", type=int, default=1337)
     args = parser.parse_args()
 
     os.makedirs(args.save_dir, exist_ok=True)
@@ -119,10 +109,7 @@ def main():
 
     print(f"LLM parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6:.3f}M")
 
-    wandb = None
-    if args.use_wandb:
-        import swanlab as wandb  # noqa: F811
-        wandb.init(project=args.wandb_project, name=f"sft-bs{args.batch_size}", config=vars(args))
+    wandb = init_wandb_if_needed(args, run_name=f"sft-bs{args.batch_size}")
 
     ds = SFTDataset(args.data_path, tokenizer, max_length=args.max_seq_len)
     loader = DataLoader(ds, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)

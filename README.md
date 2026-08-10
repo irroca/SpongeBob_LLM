@@ -73,6 +73,24 @@ printf '海绵宝宝喜欢做什么？\nquit\n' | python3 chat.py \
 - **DPO**（`dpo.py`）：冻结 reference（默认=初始 SFT），标准 Bradley-Terry / DPO loss，response token-sum log-prob。
 - **注意力**：因果 mask 按 `q_len × kv_len` 构造，支持 KV cache 多 token 续写；可选 padding `attention_mask`。
 
+## 训练 CLI / wandb（`train_utils.py`）
+
+四个训练入口（`pretrain.py` / `SFT.py` / `distill.py` / `dpo.py`）共享同一套 CLI 参数，由
+`train_utils.add_common_train_args(parser, **overrides)` 统一添加（`--save_dir` / `--epochs` /
+`--batch_size` / `--learning_rate` / `--device` / `--use_wandb` / `--wandb_project` / `--dtype` /
+`--num_workers` / `--accumulation_steps` / `--grad_clip` / `--log_step` / `--save_step` /
+`--max_seq_len` / `--data_path` / `--resume_from` / `--seed`）；每个脚本通过关键字参数覆盖自己的默认值
+（如 `distill.py` 用 `wandb_project="SpongeBob-Distill"`），再 `add_argument` 自己的额外参数
+（如 `--teacher_path` / `--beta`）。
+
+- `--device` 统一默认 `"cuda" if torch.cuda.is_available() else "cpu"`（四个训练脚本 + `eval_ppl.py` +
+  `chat.py` 一致；此前 `pretrain.py`/`SFT.py`/`distill.py`/`dpo.py` 默认写的是 `"cuda:0"`）。
+- `--use_wandb True --wandb_project ...`：四个训练脚本现在都支持（`distill.py`/`dpo.py` 是本轮新增，
+  之前只有 `pretrain.py`/`SFT.py` 有）。日志由 `train_utils.init_wandb_if_needed(args, run_name=...)`
+  统一处理：`use_wandb=False` 时直接返回 `None`（不 import）；为 `True` 时才 `import swanlab as wandb`
+  并 `wandb.init(...)`，随后训练循环里 `if wandb is not None: wandb.log({...})`。`swanlab` 是可选依赖
+  （见 `requirements.txt`），未安装时打开 `--use_wandb` 会直接抛 `ModuleNotFoundError`。
+
 ## 测试
 
 ```bash
@@ -86,8 +104,26 @@ LLMConfig(dim=512, n_layers=8, n_heads=8, n_kv_heads=8, vocab_size=6400, max_seq
 # ≈ 29M params；设置 n_kv_heads < n_heads 即启用 GQA
 ```
 
-## 局限（写进简历前请读）
+## 已知行为与限制（本轮 solidify 覆盖）
 
+- **`--resume_from` + shuffle 的顺序不保证**：`DataLoader(..., shuffle=True)` 每次重新创建
+  `DataLoader`/新进程时都会用不同的打乱顺序（没有固定/可派生的 per-epoch seed），而
+  `train_epoch` 的 resume 逻辑是"跳过前 `start_step` 个 batch"。这只保证**跳过的 batch 数量**
+  与上次一致，**不保证**跳过的是同一批数据——同一 epoch 内 resume 后大概率会重复或漏掉一些样本。
+  这是当前实现的已知限制，不是 bug；如需严格可复现的 resume，需要自己引入固定 seed 的
+  `Sampler`（不在本轮范围内）。
+- **`eval_ppl.py` 按 pretrain 方式包裹文本**：`calculate_ppl` 对每条文本先用
+  `wrap_pretrain_text` 包上 `bos_token`/`eos_token`（与 `dataset.PretrainDataset` 编码方式一致），
+  再 tokenize/padding/truncate 计算困惑度，确保评估输入分布与训练输入分布对齐（旧版本直接对裸文本
+  计算，会低估真实 PPL）。
+- **`generate` 支持 batch>1 且逐行独立判断 EOS**：`SpongeBob._stream_generate` 维护一个
+  `finished` 布尔张量，每行各自判断是否已生成 `eos_token_id`；已结束的行从**下一步**开始持续输出
+  `pad_token_id`（命中 EOS 当步仍输出真实 EOS token），其余未结束的行继续正常采样，直到全部行
+  `finished` 或达到 `max_new_tokens` 才停止整个循环。因此调用方拿到的输出里，已结束的行末尾会有
+  `pad_token_id` 填充，需要自行按 EOS 位置截断（`chat.py` 单条生成时不受影响）。
+- **KV cache 下的 `attention_mask` 长度语义**：`model.forward` 在带 `past_key_values` 续写时，若传入
+  的 `attention_mask` 长度等于新 chunk 长度（`q_len`），会自动在左侧补 1（等价于假设所有缓存的历史
+  key 都可见）扩展到 `kv_len` 再使用；若长度已等于 `kv_len` 则原样使用；其他长度会抛 `ValueError`。
 - 无分布式训练、无 FlashAttention 绑定、无服务化 API、无 INT8/INT4。
 - fixtures / CPU smoke **不能**代表语言能力；请在自己的 GPU + 真实数据上填 `docs/experiments.md`。
 - 旧版伪「特殊 token 加权蒸馏」已移除，现为真实 KD。

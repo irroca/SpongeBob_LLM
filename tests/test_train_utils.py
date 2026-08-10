@@ -1,7 +1,11 @@
+import argparse
+import importlib.util
+
+import pytest
 import torch
 import torch.nn as nn
 
-from train_utils import flush_pending_grads, optimizer_step
+from train_utils import add_common_train_args, flush_pending_grads, init_wandb_if_needed, optimizer_step
 
 
 def _tiny_model_and_optimizer():
@@ -68,3 +72,53 @@ def test_optimizer_step_clips_grad_norm():
     # backward and checking the pre-step norm would have been large, then confirming
     # optimizer_step ran clip_grad_norm_ without raising and cleared grads afterward.
     assert model.weight.grad is None
+
+
+def test_add_common_train_args_uses_overridden_defaults():
+    parser = argparse.ArgumentParser()
+    add_common_train_args(
+        parser,
+        batch_size=4,
+        learning_rate=1e-4,
+        wandb_project="SpongeBob-Distill",
+        log_step=1,
+        max_seq_len=256,
+        data_path="tests/fixtures/sft_tiny.jsonl",
+    )
+    args = parser.parse_args([])
+
+    assert args.batch_size == 4
+    assert args.learning_rate == 1e-4
+    assert args.wandb_project == "SpongeBob-Distill"
+    assert args.log_step == 1
+    assert args.max_seq_len == 256
+    assert args.data_path == "tests/fixtures/sft_tiny.jsonl"
+    assert args.use_wandb is False
+    assert args.device == ("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def test_add_common_train_args_allows_stage_specific_extras():
+    parser = argparse.ArgumentParser()
+    add_common_train_args(parser)
+    parser.add_argument("--teacher_path", type=str, required=True)
+
+    args = parser.parse_args(["--teacher_path", "foo.pth"])
+
+    assert args.teacher_path == "foo.pth"
+    assert args.save_dir == "results"
+
+
+def test_init_wandb_if_needed_returns_none_when_disabled():
+    args = argparse.Namespace(use_wandb=False, wandb_project="p", batch_size=2)
+    assert init_wandb_if_needed(args) is None
+
+
+def test_init_wandb_if_needed_raises_without_swanlab_when_enabled():
+    """swanlab is an optional dependency (see requirements.txt) and is not installed in
+    the CPU test environment, so enabling --use_wandb should surface the lazy import
+    error rather than silently doing nothing."""
+    if importlib.util.find_spec("swanlab") is not None:
+        pytest.skip("swanlab is installed; enabled-path is exercised manually instead")
+    args = argparse.Namespace(use_wandb=True, wandb_project="p", batch_size=2)
+    with pytest.raises(ImportError):
+        init_wandb_if_needed(args)

@@ -15,9 +15,11 @@ from dataset import SFTDataset
 from losses import kd_loss, masked_cross_entropy
 from model import SpongeBob
 from train_utils import (
+    add_common_train_args,
     build_autocast_scaler,
     flush_pending_grads,
     get_lr,
+    init_wandb_if_needed,
     load_train_state,
     load_weights,
     optimizer_step,
@@ -26,7 +28,7 @@ from train_utils import (
 )
 
 
-def train_epoch(epoch, start_step, global_step, student, teacher, optimizer, scaler, loader, args, ctx):
+def train_epoch(epoch, start_step, global_step, student, teacher, optimizer, scaler, loader, args, ctx, wandb):
     student.train()
     teacher.eval()
     pending = False
@@ -75,6 +77,16 @@ def train_epoch(epoch, start_step, global_step, student, teacher, optimizer, sca
                 f"ce={ce.item():.4f} kd={kd.item():.4f} lr={optimizer.param_groups[-1]['lr']:.7f} "
                 f"global_step={global_step}"
             )
+            if wandb is not None:
+                wandb.log(
+                    {
+                        "loss": current_loss,
+                        "ce": ce.item(),
+                        "kd": kd.item(),
+                        "lr": optimizer.param_groups[-1]["lr"],
+                        "global_step": global_step,
+                    }
+                )
 
         if global_step > 0 and global_step % args.save_step == 0:
             save_checkpoint(
@@ -96,25 +108,19 @@ def train_epoch(epoch, start_step, global_step, student, teacher, optimizer, sca
 
 def main():
     parser = argparse.ArgumentParser(description="Knowledge distillation (teacher -> student)")
-    parser.add_argument("--save_dir", type=str, default="results")
-    parser.add_argument("--epochs", type=int, default=1)
-    parser.add_argument("--batch_size", type=int, default=4)
-    parser.add_argument("--learning_rate", type=float, default=1e-4)
-    parser.add_argument("--device", type=str, default="cuda:0" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--dtype", type=str, default="float32")
-    parser.add_argument("--num_workers", type=int, default=0)
-    parser.add_argument("--accumulation_steps", type=int, default=1)
-    parser.add_argument("--grad_clip", type=float, default=1.0)
-    parser.add_argument("--log_step", type=int, default=1)
-    parser.add_argument("--save_step", type=int, default=1000)
-    parser.add_argument("--max_seq_len", type=int, default=256)
-    parser.add_argument("--data_path", type=str, default="tests/fixtures/sft_tiny.jsonl")
+    add_common_train_args(
+        parser,
+        batch_size=4,
+        learning_rate=1e-4,
+        wandb_project="SpongeBob-Distill",
+        log_step=1,
+        max_seq_len=256,
+        data_path="tests/fixtures/sft_tiny.jsonl",
+    )
     parser.add_argument("--teacher_path", type=str, required=True)
     parser.add_argument("--student_path", type=str, required=True)
     parser.add_argument("--alpha", type=float, default=0.5, help="KD mix weight")
     parser.add_argument("--temperature", type=float, default=2.0)
-    parser.add_argument("--resume_from", type=str, default=None)
-    parser.add_argument("--seed", type=int, default=1337)
     args = parser.parse_args()
 
     os.makedirs(args.save_dir, exist_ok=True)
@@ -142,6 +148,8 @@ def main():
         if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
             start_epoch, start_step, global_step, _ = load_train_state(ckpt, optimizer, scaler)
 
+    wandb = init_wandb_if_needed(args, run_name=f"distill-bs{args.batch_size}")
+
     ds = SFTDataset(args.data_path, tokenizer, max_length=args.max_seq_len)
     loader = DataLoader(ds, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
     args.total_steps = max(1, args.epochs * len(loader) // args.accumulation_steps)
@@ -150,7 +158,7 @@ def main():
     for epoch in range(start_epoch, args.epochs):
         global_step, last_loss = train_epoch(
             epoch, start_step if epoch == start_epoch else 0,
-            global_step, student, teacher, optimizer, scaler, loader, args, ctx,
+            global_step, student, teacher, optimizer, scaler, loader, args, ctx, wandb,
         )
         start_step = 0
         save_checkpoint(

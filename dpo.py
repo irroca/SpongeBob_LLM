@@ -15,9 +15,11 @@ from dataset import PreferenceDataset
 from losses import dpo_loss, sequence_logprobs
 from model import SpongeBob
 from train_utils import (
+    add_common_train_args,
     build_autocast_scaler,
     flush_pending_grads,
     get_lr,
+    init_wandb_if_needed,
     load_train_state,
     load_weights,
     optimizer_step,
@@ -26,7 +28,7 @@ from train_utils import (
 )
 
 
-def train_epoch(epoch, start_step, global_step, policy, ref, optimizer, scaler, loader, args, ctx):
+def train_epoch(epoch, start_step, global_step, policy, ref, optimizer, scaler, loader, args, ctx, wandb):
     policy.train()
     ref.eval()
     pending = False
@@ -73,6 +75,14 @@ def train_epoch(epoch, start_step, global_step, policy, ref, optimizer, scaler, 
                 f"dpo_loss={current_loss:.4f} "
                 f"lr={optimizer.param_groups[-1]['lr']:.7f} global_step={global_step}"
             )
+            if wandb is not None:
+                wandb.log(
+                    {
+                        "dpo_loss": current_loss,
+                        "lr": optimizer.param_groups[-1]["lr"],
+                        "global_step": global_step,
+                    }
+                )
 
         if global_step > 0 and global_step % args.save_step == 0:
             save_checkpoint(
@@ -88,24 +98,18 @@ def train_epoch(epoch, start_step, global_step, policy, ref, optimizer, scaler, 
 
 def main():
     parser = argparse.ArgumentParser(description="DPO preference optimization")
-    parser.add_argument("--save_dir", type=str, default="results")
-    parser.add_argument("--epochs", type=int, default=1)
-    parser.add_argument("--batch_size", type=int, default=2)
-    parser.add_argument("--learning_rate", type=float, default=1e-5)
-    parser.add_argument("--device", type=str, default="cuda:0" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--dtype", type=str, default="float32")
-    parser.add_argument("--num_workers", type=int, default=0)
-    parser.add_argument("--accumulation_steps", type=int, default=1)
-    parser.add_argument("--grad_clip", type=float, default=1.0)
-    parser.add_argument("--log_step", type=int, default=1)
-    parser.add_argument("--save_step", type=int, default=1000)
-    parser.add_argument("--max_seq_len", type=int, default=256)
-    parser.add_argument("--data_path", type=str, default="tests/fixtures/preference_tiny.jsonl")
+    add_common_train_args(
+        parser,
+        batch_size=2,
+        learning_rate=1e-5,
+        wandb_project="SpongeBob-DPO",
+        log_step=1,
+        max_seq_len=256,
+        data_path="tests/fixtures/preference_tiny.jsonl",
+    )
     parser.add_argument("--policy_path", type=str, required=True, help="Init policy (usually SFT)")
     parser.add_argument("--ref_path", type=str, default=None, help="Frozen reference; default=policy_path")
     parser.add_argument("--beta", type=float, default=0.1)
-    parser.add_argument("--resume_from", type=str, default=None)
-    parser.add_argument("--seed", type=int, default=1337)
     args = parser.parse_args()
 
     os.makedirs(args.save_dir, exist_ok=True)
@@ -134,6 +138,8 @@ def main():
         if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
             start_epoch, start_step, global_step, _ = load_train_state(ckpt, optimizer, scaler)
 
+    wandb = init_wandb_if_needed(args, run_name=f"dpo-bs{args.batch_size}")
+
     ds = PreferenceDataset(args.data_path, tokenizer, max_length=args.max_seq_len)
     loader = DataLoader(ds, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
     args.total_steps = max(1, args.epochs * len(loader) // args.accumulation_steps)
@@ -142,7 +148,7 @@ def main():
     for epoch in range(start_epoch, args.epochs):
         global_step, last_loss = train_epoch(
             epoch, start_step if epoch == start_epoch else 0,
-            global_step, policy, ref, optimizer, scaler, loader, args, ctx,
+            global_step, policy, ref, optimizer, scaler, loader, args, ctx, wandb,
         )
         start_step = 0
         save_checkpoint(
