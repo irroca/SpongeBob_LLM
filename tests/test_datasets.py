@@ -4,8 +4,7 @@ from dataset import PreferenceDataset, SFTDataset, assistant_loss_mask
 
 
 def test_assistant_loss_mask_no_pad_leak_after_eos():
-    """After a normal reply, tokens past the </s>\\n span must stay 0, even
-    though the current implementation over-marks by one extra index."""
+    """Pad positions after a closed assistant span must stay 0 in the loss mask."""
     bos_id = [9, 9]
     eos_id = [8, 8]
     pad_token_id = 0
