@@ -128,11 +128,20 @@ class Attention(nn.Module):
         if attention_mask is not None:
             key_mask = attention_mask
             if key_mask.dim() == 2:
-                if key_mask.shape[-1] < kv_len:
-                    # allow shorter mask only when it matches current chunk during prefill mismatch
-                    pad = torch.ones(bsz, kv_len - key_mask.shape[-1], device=key_mask.device, dtype=key_mask.dtype)
-                    key_mask = torch.cat([key_mask, pad], dim=-1)
-                key_mask = key_mask[:, :kv_len]
+                if past_key_value is not None and key_mask.shape[-1] == q_len:
+                    # mask only covers the new chunk; cached past positions are all attendable,
+                    # so left-pad with ones (NOT right-pad, which would misalign the mask onto
+                    # the start of the cached prefix instead of the new chunk).
+                    past_ones = torch.ones(bsz, offset, device=key_mask.device, dtype=key_mask.dtype)
+                    key_mask = torch.cat([past_ones, key_mask], dim=-1)
+                elif key_mask.shape[-1] == kv_len:
+                    pass  # already covers the full key sequence; use as-is
+                else:
+                    raise ValueError(
+                        f"attention_mask last dim ({key_mask.shape[-1]}) must equal kv_len "
+                        f"({kv_len}), or q_len ({q_len}) when a KV cache is present; "
+                        f"got attention_mask.shape={tuple(attention_mask.shape)}"
+                    )
                 scores = scores.masked_fill(key_mask[:, None, None, :] == 0, float("-inf"))
         # softmax归一化
         scores = F.softmax(scores.float(), dim=-1).type_as(xq)
