@@ -16,6 +16,12 @@ def json_converter(obj):
         return obj.tolist()
     return str(obj)  # 兜底
 
+def wrap_pretrain_text(text: str, tokenizer) -> str:
+    """Wrap raw text with BOS/EOS tokens, matching PretrainDataset's encoding
+    (see dataset.py) so eval inputs are aligned with training inputs."""
+    return f"{tokenizer.bos_token}{text}{tokenizer.eos_token}"
+
+
 def calculate_ppl(model, tokenizer, texts, max_length=512, batch_size=4, device="cuda"):
     """
     计算模型在给定文本上的困惑度
@@ -42,9 +48,10 @@ def calculate_ppl(model, tokenizer, texts, max_length=512, batch_size=4, device=
         for i in tqdm(range(0, len(texts), batch_size), desc="Calculating PPL"):
             batch_texts = texts[i:i+batch_size]
             
-            # 编码文本
+            # 编码文本（与 PretrainDataset 保持一致，包裹 bos/eos）
+            wrapped_texts = [wrap_pretrain_text(text, tokenizer) for text in batch_texts]
             encodings = tokenizer(
-                batch_texts,
+                wrapped_texts,
                 max_length=max_length,
                 padding=True,
                 truncation=True,
