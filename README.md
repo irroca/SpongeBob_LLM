@@ -31,26 +31,29 @@ pip install -r requirements.txt
 使用仓库内置 fixtures（无需外部数据）：
 
 ```bash
-python pretrain.py --data_path tests/fixtures/pretrain_tiny.jsonl \
+python3 pretrain.py --data_path tests/fixtures/pretrain_tiny.jsonl \
   --epochs 1 --batch_size 2 --max_seq_len 128 --save_dir results --device cpu --dtype float32
 
-python SFT.py --data_path tests/fixtures/sft_tiny.jsonl \
+python3 SFT.py --data_path tests/fixtures/sft_tiny.jsonl \
   --pretrained_path results/pretrain_final.pth \
   --epochs 1 --batch_size 2 --max_seq_len 128 --save_dir results --device cpu --dtype float32
 
-python distill.py --data_path tests/fixtures/sft_tiny.jsonl \
-  --teacher_path results/sft_final.pth --student_path results/sft_final.pth \
+# teacher=pretrain_final.pth, student=sft_final.pth so KL is nonzero from step 1
+# (both share the default config, so shapes still match; same-size teacher/student
+# is also fine, e.g. --teacher_path results/sft_final.pth --student_path results/sft_final.pth)
+python3 distill.py --data_path tests/fixtures/sft_tiny.jsonl \
+  --teacher_path results/pretrain_final.pth --student_path results/sft_final.pth \
   --alpha 0.5 --temperature 2.0 --epochs 1 --batch_size 2 --max_seq_len 128 \
   --save_dir results --device cpu --dtype float32
 
-python dpo.py --data_path tests/fixtures/preference_tiny.jsonl \
+python3 dpo.py --data_path tests/fixtures/preference_tiny.jsonl \
   --policy_path results/sft_final.pth --beta 0.1 \
   --epochs 1 --batch_size 2 --max_seq_len 128 --save_dir results --device cpu --dtype float32
 
-python eval_ppl.py --model_path results/pretrain_final.pth \
+python3 eval_ppl.py --model_path results/pretrain_final.pth \
   --dataset_path tests/fixtures/pretrain_tiny.jsonl --max_seq_len 128 --device cpu
 
-printf '海绵宝宝喜欢做什么？\nquit\n' | python chat.py \
+printf '海绵宝宝喜欢做什么？\nquit\n' | python3 chat.py \
   --save_dir results --model_mode 1 --device cpu --max_new_tokens 64
 ```
 
@@ -73,7 +76,7 @@ printf '海绵宝宝喜欢做什么？\nquit\n' | python chat.py \
 ## 测试
 
 ```bash
-python -m pytest tests/ -q
+python3 -m pytest tests/ -q
 ```
 
 ## 默认模型配置
