@@ -1,312 +1,168 @@
-import os
+"""Real knowledge distillation: frozen teacher + student CE + temperature KL."""
+
+from __future__ import annotations
+
 import argparse
-import time
-import math
+import os
+
 import torch
-from torch import optim, nn
-from contextlib import nullcontext
-from transformers import AutoTokenizer
+from torch import optim
 from torch.utils.data import DataLoader
-from model import SpongeBob
+from transformers import AutoTokenizer
+
 from Config import LLMConfig
 from dataset import SFTDataset
+from losses import kd_loss, masked_cross_entropy
+from model import SpongeBob
+from train_utils import (
+    build_autocast_scaler,
+    get_lr,
+    load_train_state,
+    load_weights,
+    save_checkpoint,
+    set_seed,
+    str2bool,
+)
 
-def get_lr(current_step, total_steps, lr):
-    """学习率调度函数"""
-    if current_step < total_steps * 0.1:  # 前10%步数使用线性warmup
-        return lr * (current_step / (total_steps * 0.1))
-    return lr * 0.1 + 0.5 * lr * (1 + math.cos(math.pi * (current_step - total_steps * 0.1) / (total_steps * 0.9)))
 
-def save_checkpoint(model, optimizer, scaler, epoch, step, global_step, loss, config, save_path):
-    """保存完整的训练状态"""
-    checkpoint = {
-        'epoch': epoch,
-        'step': step,
-        'global_step': global_step,
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'scaler_state_dict': scaler.state_dict() if scaler else None,
-        'loss': loss,
-        'config': config.__dict__,
-        'timestamp': time.time()
-    }
-    
-    # 确保目录存在
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    torch.save(checkpoint, save_path)
-    print(f"Checkpoint saved to {save_path}")
-
-def load_checkpoint(checkpoint_path, model, optimizer, scaler, device):
-    """加载训练状态"""
-    if not os.path.exists(checkpoint_path):
-        print(f"Checkpoint {checkpoint_path} not found, starting from scratch")
-        return 0, 0, 0, float('inf')
-    
-    print(f"Loading checkpoint from {checkpoint_path}")
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-    
-    # 加载模型状态
-    if 'model_state_dict' in checkpoint:
-        model.load_state_dict(checkpoint['model_state_dict'])
-        print("Model state loaded")
-    
-    # 加载优化器状态
-    if 'optimizer_state_dict' in checkpoint and optimizer is not None:
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        print("Optimizer state loaded")
-    
-    # 加载梯度缩放器状态
-    if 'scaler_state_dict' in checkpoint and scaler is not None and checkpoint['scaler_state_dict'] is not None:
-        scaler.load_state_dict(checkpoint['scaler_state_dict'])
-        print("Scaler state loaded")
-    
-    # 返回训练状态
-    epoch = checkpoint.get('epoch', 0)
-    step = checkpoint.get('step', 0)
-    global_step = checkpoint.get('global_step', 0)
-    loss = checkpoint.get('loss', float('inf'))
-    
-    print(f"Resumed from checkpoint: epoch {epoch}, step {step}, global_step {global_step}, loss {loss:.4f}")
-    return epoch, step, global_step, loss
-
-def train_epoch(epoch, start_step, global_step, model, optimizer, scaler, train_loader, args, ctx, wandb):
-    """训练一个epoch"""
-    loss_fct = nn.CrossEntropyLoss(reduction='none')
-    start_time = time.time()
-    total_batches = len(train_loader)
-    
-    # 思考标签占位符
-    tokenizer = AutoTokenizer.from_pretrained('./spongebob_tokenizer')
-    start_of_think_ids = tokenizer('<think>').input_ids
-    end_of_think_ids = tokenizer('</think>').input_ids
-    start_of_answer_ids = tokenizer('<answer>').input_ids
-    end_of_answer_ids = tokenizer('</answer>').input_ids
-     
-    # 从指定步骤开始训练
-    for step, (X, Y, loss_mask) in enumerate(train_loader):
+def train_epoch(epoch, start_step, global_step, student, teacher, optimizer, scaler, loader, args, ctx):
+    student.train()
+    teacher.eval()
+    for step, (X, Y, loss_mask) in enumerate(loader):
         if step < start_step:
-            if step % 100 == 0:  # 每100步打印一次跳过的信息
-                print(f"Skipping step {step}/{start_step}")
             continue
-               
-        X = X.to(args.device,non_blocking=True)
-        Y = Y.to(args.device,non_blocking=True)
-        loss_mask = loss_mask.to(args.device,non_blocking=True)
+        X = X.to(args.device)
+        Y = Y.to(args.device)
+        loss_mask = loss_mask.to(args.device)
 
-        lr = get_lr(global_step, args.total_steps, args.learning_rate)
-        for param_group in optimizer.param_groups:
-            param_group['lr'] = lr
+        # global_step counts optimizer updates (1-based after first update)
+        lr = get_lr(max(global_step, 1), args.total_steps, args.learning_rate)
+        for pg in optimizer.param_groups:
+            pg["lr"] = lr
 
         with ctx:
-            res = model(X)
-            loss = loss_fct(
-                res.logits.view(-1, res.logits.size(-1)),
-                Y.view(-1)
-            ).view(Y.size())
-            
-            # 蒸馏特有的损失加权：对特殊标记施加额外惩罚
-            sp_ids = torch.isin(Y.view(-1),
-                             torch.tensor(start_of_think_ids + end_of_think_ids
-                                          + start_of_answer_ids + end_of_answer_ids
-                                          ).to(args.device))
-            
-            # 在特殊标记对应的位置增加额外的权重
-            weighted_loss_mask = loss_mask.view(-1).clone()
-            weighted_loss_mask[sp_ids] = args.special_token_weight
-            weighted_loss_mask = weighted_loss_mask.view(Y.size())
-            
-            loss = (loss * weighted_loss_mask).sum() / weighted_loss_mask.sum()
-            loss = loss / args.accumulation_steps
+            student_out = student(X)
+            with torch.no_grad():
+                teacher_out = teacher(X)
+            ce = masked_cross_entropy(student_out.logits, Y, loss_mask)
+            kd = kd_loss(
+                student_out.logits,
+                teacher_out.logits.detach(),
+                temperature=args.temperature,
+                mask=loss_mask,
+            )
+            loss = ((1.0 - args.alpha) * ce + args.alpha * kd) / args.accumulation_steps
 
-        scaler.scale(loss).backward()
-          
+        if scaler is not None:
+            scaler.scale(loss).backward()
+        else:
+            loss.backward()
+
         if (step + 1) % args.accumulation_steps == 0:
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
-            scaler.step(optimizer)
-            scaler.update()
+            if scaler is not None:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(student.parameters(), args.grad_clip)
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                torch.nn.utils.clip_grad_norm_(student.parameters(), args.grad_clip)
+                optimizer.step()
             optimizer.zero_grad(set_to_none=True)
-               
-        global_step += 1
-          
+            global_step += 1
+
         if step % args.log_step == 0:
-            spend_time = time.time() - start_time
-            current_loss = loss.item() * args.accumulation_steps
-            batches_per_sec = (step + 1 - start_step) / spend_time if spend_time > 0 else 0
-            eta_minutes = (total_batches - step) / batches_per_sec / 60 if batches_per_sec > 0 else 0
             print(
-            'Epoch:[{}/{}]({}/{}) loss:{:.3f} lr:{:.7f} global_step:{} ETA:{:.1f}min'.format(
-                epoch + 1,
-                args.epochs,
+                f"Epoch[{epoch+1}/{args.epochs}] ({step}/{len(loader)}) "
+                f"loss={loss.item() * args.accumulation_steps:.4f} "
+                f"ce={ce.item():.4f} kd={kd.item():.4f} lr={optimizer.param_groups[-1]['lr']:.7f} "
+                f"global_step={global_step}"
+            )
+
+        if global_step > 0 and global_step % args.save_step == 0:
+            save_checkpoint(
+                f"{args.save_dir}/latest_checkpoint.pth",
+                student,
+                optimizer,
+                scaler,
+                epoch,
                 step,
-                total_batches,
-                current_loss,
-                optimizer.param_groups[-1]['lr'],
                 global_step,
-                eta_minutes
-                )
+                loss.item() * args.accumulation_steps,
+                args.lm_config,
             )
-               
-        if wandb is not None:
-            wandb.log({
-                "loss": current_loss,
-                "lr": optimizer.param_groups[-1]['lr'],
-                "global_step": global_step,
-                "epoch": epoch
-            })
-
-        # 定期保存checkpoint
-        if global_step % args.save_step == 0:
-            checkpoint_path = f'{args.save_dir}/checkpoint_epoch_{epoch}_step_{global_step}.pth'
-            save_checkpoint(
-                model, optimizer, scaler, epoch, step, global_step, 
-                current_loss, args.lm_config, checkpoint_path
-            )
-            
-            # 同时保存最新checkpoint
-            latest_path = f'{args.save_dir}/latest_checkpoint.pth'
-            save_checkpoint(
-                model, optimizer, scaler, epoch, step, global_step,
-                current_loss, args.lm_config, latest_path
-            )
-
-        # 保存最终模型
-        if args.save_final_model and (epoch == args.epochs - 1 and step == len(train_loader) - 1):
-            model_path = f'{args.save_dir}/distill_final.pth'
-            torch.save(model.state_dict(), model_path)
-            print(f"Final distill model saved to {model_path}")
 
     return global_step
 
-def init_model_and_optimizer(args, checkpoint_path=None):
-    """初始化模型和优化器，可选择从checkpoint恢复"""
-    tokenizer = AutoTokenizer.from_pretrained('./spongebob_tokenizer')
-    model = SpongeBob(args.lm_config).to(args.device)
-    
-    # 如果有SFT模型，先加载SFT权重
-    if args.sft_path and os.path.exists(args.sft_path):
-        print(f"Loading SFT weights from {args.sft_path}")
-        if args.sft_path.endswith('.pth'):
-            # 加载PyTorch格式的权重
-            state_dict = torch.load(args.sft_path, map_location=args.device)
-            # 过滤掉可能不匹配的键（如mask等）
-            state_dict = {k: v for k, v in state_dict.items() if 'mask' not in k}
-            model.load_state_dict(state_dict, strict=False)
-        else:
-            # 如果是HuggingFace格式的目录
-            from transformers import AutoModel
-            sft_model = AutoModel.from_pretrained(args.sft_path)
-            model.load_state_dict(sft_model.state_dict(), strict=False)
-        print("SFT weights loaded")
-    
-    # 初始化优化器和缩放器
-    optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate)
-    scaler = torch.amp.GradScaler('cuda',enabled=(args.dtype in ['float16', 'bfloat16']))
-    
-    # 训练状态变量
-    start_epoch = 0
-    start_step = 0
-    global_step = 0
-    best_loss = float('inf')
-    
-    # 从checkpoint恢复
-    if checkpoint_path and os.path.exists(checkpoint_path):
-        start_epoch, start_step, global_step, best_loss = load_checkpoint(
-            checkpoint_path, model, optimizer, scaler, args.device
-        )
-    
-    print(f'LLM parameters size:{sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6:.3f} Million')
-    return model, tokenizer, optimizer, scaler, start_epoch, start_step, global_step, best_loss
 
 def main():
-    """主训练函数"""
-    parser = argparse.ArgumentParser()
-
+    parser = argparse.ArgumentParser(description="Knowledge distillation (teacher -> student)")
     parser.add_argument("--save_dir", type=str, default="results")
-    parser.add_argument("--epochs", type=int, default=2)
-    parser.add_argument("--batch_size", type=int, default=28)
-    parser.add_argument("--learning_rate", type=float, default=1e-6)
+    parser.add_argument("--epochs", type=int, default=1)
+    parser.add_argument("--batch_size", type=int, default=4)
+    parser.add_argument("--learning_rate", type=float, default=1e-4)
     parser.add_argument("--device", type=str, default="cuda:0" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--use_wandb", type=bool, default=False)
-    parser.add_argument("--dtype", type=str, default="bfloat16")
-    parser.add_argument("--wandb_project", type=str, default="SpongeBob-Distill")
-    parser.add_argument("--num_workers", type=int, default=1)
-    parser.add_argument("--accumulation_steps", type=int, default=16)
+    parser.add_argument("--dtype", type=str, default="float32")
+    parser.add_argument("--num_workers", type=int, default=0)
+    parser.add_argument("--accumulation_steps", type=int, default=1)
     parser.add_argument("--grad_clip", type=float, default=1.0)
-    parser.add_argument("--log_step", type=int, default=10)
+    parser.add_argument("--log_step", type=int, default=1)
     parser.add_argument("--save_step", type=int, default=1000)
-    parser.add_argument('--max_seq_len', default=1024, type=int)
-    parser.add_argument("--data_path", type=str, default="datasets/r1_1024.jsonl")
-    parser.add_argument("--resume_from", type=str, default=None, help="Path to checkpoint to resume from")
-    parser.add_argument("--save_final_model", type=bool, default=True, help="Save final model separately")
-    parser.add_argument("--sft_path", type=str, default="./results/sft_final.pth", 
-                       help="Path to SFT model (PyTorch .pth file or HF directory)")
-    parser.add_argument("--special_token_weight", type=float, default=10.0, 
-                       help="Weight for special tokens (<think>, <answer> etc.) in loss calculation")
-    
+    parser.add_argument("--max_seq_len", type=int, default=256)
+    parser.add_argument("--data_path", type=str, default="tests/fixtures/sft_tiny.jsonl")
+    parser.add_argument("--teacher_path", type=str, required=True)
+    parser.add_argument("--student_path", type=str, required=True)
+    parser.add_argument("--alpha", type=float, default=0.5, help="KD mix weight")
+    parser.add_argument("--temperature", type=float, default=2.0)
+    parser.add_argument("--resume_from", type=str, default=None)
+    parser.add_argument("--seed", type=int, default=1337)
     args = parser.parse_args()
 
-    args.lm_config = LLMConfig(max_seq_len=args.max_seq_len)
-    args.save_dir = os.path.join(args.save_dir)
     os.makedirs(args.save_dir, exist_ok=True)
+    set_seed(args.seed)
+    args.lm_config = LLMConfig(max_seq_len=args.max_seq_len)
 
-    torch.manual_seed(1337)
-    device_type = "cuda" if "cuda" in args.device else "cpu"
+    tokenizer = AutoTokenizer.from_pretrained("./spongebob_tokenizer")
+    cfg = LLMConfig(max_seq_len=args.max_seq_len, vocab_size=tokenizer.vocab_size)
+    args.lm_config = cfg
 
-    args.wandb_run_name = f"SpongeBob-Distill-Epoch-{args.epochs}-BatchSize-{args.batch_size}-LearningRate-{args.learning_rate}"
-    
-    ctx = nullcontext() if device_type == "cpu" else torch.amp.autocast('cuda')
+    teacher = SpongeBob(cfg).to(args.device)
+    student = SpongeBob(cfg).to(args.device)
 
-    if args.use_wandb:
-        import swanlab as wandb 
-        wandb.init(project=args.wandb_project, name=args.wandb_run_name, config=args)
-    else:
-        wandb = None
-    
-    # 初始化模型和优化器（可能从checkpoint恢复）
-    model, tokenizer, optimizer, scaler, start_epoch, start_step, global_step, best_loss = init_model_and_optimizer(
-    args, args.resume_from
-    )
+    load_weights(args.teacher_path, teacher, args.device, strict=False)
+    load_weights(args.student_path, student, args.device, strict=False)
+    teacher.eval()
+    for p in teacher.parameters():
+        p.requires_grad_(False)
 
-    train_ds = SFTDataset(args.data_path, tokenizer, max_length=args.lm_config.max_seq_len)
-    train_loader = DataLoader(
-        train_ds,
-        batch_size=args.batch_size,
-        pin_memory=True,
-        drop_last=False,
-        shuffle=True,
-        num_workers=args.num_workers,
-    )
+    optimizer = optim.AdamW((p for p in student.parameters() if p.requires_grad), lr=args.learning_rate)
+    ctx, scaler = build_autocast_scaler(args.device, args.dtype)
 
-    # 计算总步数（用于学习率调度）
-    batches_per_epoch = len(train_loader)
-    args.total_steps = args.epochs * batches_per_epoch // args.accumulation_steps
-    print(f"Total batches per epoch: {batches_per_epoch}")
-    print(f"Total training steps: {args.total_steps}")
-    print(f"Starting from epoch {start_epoch}, step {start_step}, global_step {global_step}")
-    
-    # 训练循环
+    start_epoch, start_step, global_step, _ = 0, 0, 0, float("inf")
+    if args.resume_from and os.path.exists(args.resume_from):
+        ckpt = load_weights(args.resume_from, student, args.device, strict=False)
+        if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
+            start_epoch, start_step, global_step, _ = load_train_state(ckpt, optimizer, scaler)
+
+    ds = SFTDataset(args.data_path, tokenizer, max_length=args.max_seq_len)
+    loader = DataLoader(ds, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
+    args.total_steps = max(1, args.epochs * len(loader) // args.accumulation_steps)
+
+    print(f"KD: alpha={args.alpha} T={args.temperature} steps={args.total_steps}")
     for epoch in range(start_epoch, args.epochs):
-        print(f"\n=== Starting Epoch {epoch + 1}/{args.epochs} ===")
-    
         global_step = train_epoch(
-            epoch, start_step, global_step, model, optimizer, scaler, 
-            train_loader, args, ctx, wandb
+            epoch, start_step if epoch == start_epoch else 0,
+            global_step, student, teacher, optimizer, scaler, loader, args, ctx,
         )
-    
-        # 重置start_step，下一epoch从0开始
         start_step = 0
-        
-        # 每个epoch结束后保存checkpoint
-        epoch_checkpoint_path = f'{args.save_dir}/epoch_{epoch+1}_checkpoint.pth'
         save_checkpoint(
-            model, optimizer, scaler, epoch + 1, 0, global_step,
-            best_loss, args.lm_config, epoch_checkpoint_path
+            f"{args.save_dir}/epoch_{epoch+1}_checkpoint.pth",
+            student, optimizer, scaler, epoch + 1, 0, global_step, 0.0, args.lm_config,
         )
-        
-        print(f"=== Finished Epoch {epoch + 1}/{args.epochs} ===\n")
-    print("Distill Training completed!")
+
+    final_path = f"{args.save_dir}/distill_final.pth"
+    torch.save(student.state_dict(), final_path)
+    print(f"Saved {final_path}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
