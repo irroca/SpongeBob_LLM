@@ -21,7 +21,6 @@ from train_utils import (
     load_weights,
     save_checkpoint,
     set_seed,
-    str2bool,
 )
 
 
@@ -119,7 +118,6 @@ def main():
 
     os.makedirs(args.save_dir, exist_ok=True)
     set_seed(args.seed)
-    args.lm_config = LLMConfig(max_seq_len=args.max_seq_len)
 
     tokenizer = AutoTokenizer.from_pretrained("./spongebob_tokenizer")
     cfg = LLMConfig(max_seq_len=args.max_seq_len, vocab_size=tokenizer.vocab_size)
