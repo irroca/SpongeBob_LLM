@@ -1,7 +1,27 @@
 import json
 from torch.utils.data import Dataset, DataLoader
 import torch
-from sklearn.model_selection import train_test_split
+
+
+def assistant_loss_mask(input_ids, bos_id, eos_id, max_length):
+    """Mark tokens inside <s>assistant\\n ... </s>\\n spans as 1."""
+    loss_mask = [0] * len(input_ids)
+    i = 0
+    while i < len(input_ids):
+        if input_ids[i : i + len(bos_id)] == bos_id:
+            start = i + len(bos_id)
+            end = start
+            while end < len(input_ids):
+                if input_ids[end : end + len(eos_id)] == eos_id:
+                    break
+                end += 1
+            for j in range(start, min(end + len(eos_id) + 1, max_length)):
+                loss_mask[j] = 1
+            i = end + len(eos_id) if end < len(input_ids) else len(input_ids)
+        else:
+            i += 1
+    return loss_mask
+
 
 class PretrainDataset(Dataset):
     def __init__(self, data_path, tokenizer, max_length=512):
@@ -132,38 +152,7 @@ class SFTDataset(Dataset):
         )
     
     def _generate_loss_mask(self, input_ids):
-        """
-        根据输入 token IDs 生成损失掩码。
-        只有位于 <s>assistant\n 与 </s>\n 之间的 token 被标记为 1，其余为 0
-        
-        参数:
-          input_ids: 一个整数列表，表示输入 token IDs
-        
-        返回:
-          loss_mask: 一个与 input_ids 长度相同的列表，1 表示计算损失的位置，0 表示忽略
-        """
-        loss_mask = [0] * len(input_ids)
-        i = 0
-        # 遍历整个输入序列
-        while i < len(input_ids):
-            # 检查当前位置是否匹配开始标记
-            if input_ids[i:i + len(self.bos_id)] == self.bos_id:
-                # 记录开始位置，排除 bos 部分
-                start = i + len(self.bos_id)
-                end = start
-                # 从开始位置向后查找结束标记
-                while end < len(input_ids):
-                    if input_ids[end:end + len(self.eos_id)] == self.eos_id:
-                        break
-                    end += 1
-                # 将开始标记之后到结束标记位置之间的 token 标记为 1（参与损失计算）
-                for j in range(start + 1, min(end + len(self.eos_id) + 1, self.max_length)):
-                    loss_mask[j] = 1
-                # 更新索引：跳过整个对话部分（包括结束标记）
-                i = end + len(self.eos_id) if end < len(input_ids) else len(input_ids)
-            else:
-                i += 1
-        return loss_mask
+        return assistant_loss_mask(input_ids, self.bos_id, self.eos_id, self.max_length)
     
     def __getitem__(self, index):
         # 获取对应索引的样本
@@ -185,18 +174,46 @@ class SFTDataset(Dataset):
 
         return X, Y, loss_mask
 
+class PreferenceDataset(Dataset):
+    """DPO preference pairs: prompt / chosen / rejected."""
 
+    def __init__(self, jsonl_path, tokenizer, max_length=1024):
+        super().__init__()
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+        self.samples = self.load_data(jsonl_path)
+        self.bos_id = tokenizer("<s>assistant\n", add_special_tokens=False).input_ids
+        self.eos_id = tokenizer("</s>\n", add_special_tokens=False).input_ids
 
-# if __name__ == "__main__":
-#     from transformers import AutoTokenizer
-#     tokenizer = AutoTokenizer.from_pretrained("spongebob_tokenizer")
-#     dataset = SFTDataset("datasets/r1_1024.jsonl", tokenizer, max_length=1024)
-#     dataset.__getitem__(0)
-#     # dataloader = DataLoader(dataset, batch_size=2, shuffle=True)
+    def load_data(self, path):
+        samples = []
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                samples.append(json.loads(line.strip()))
+        return samples
 
-#     # for i, (X, Y, loss_mask) in enumerate(dataloader):
-#     #     print("X:", X)
-#     #     print("Y:", Y)
-#     #     print("loss_mask:", loss_mask)
-#     #     if i == 1:
-#     #         break
+    def __len__(self):
+        return len(self.samples)
+
+    def _encode_response(self, prompt: str, answer: str):
+        messages = [
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": answer},
+        ]
+        text = self.tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=False
+        )
+        input_ids = self.tokenizer(text).input_ids[: self.max_length]
+        input_ids += [self.tokenizer.pad_token_id] * (self.max_length - len(input_ids))
+        loss_mask = assistant_loss_mask(input_ids, self.bos_id, self.eos_id, self.max_length)
+        X = torch.tensor(input_ids[:-1], dtype=torch.long)
+        Y = torch.tensor(input_ids[1:], dtype=torch.long)
+        loss_mask = torch.tensor(loss_mask[1:], dtype=torch.long)
+        return X, Y, loss_mask
+
+    def __getitem__(self, index):
+        sample = self.samples[index]
+        cX, cY, cM = self._encode_response(sample["prompt"], sample["chosen"])
+        rX, rY, rM = self._encode_response(sample["prompt"], sample["rejected"])
+        return cX, cY, cM, rX, rY, rM
+

@@ -87,16 +87,13 @@ class Attention(nn.Module):
         # 注意力和残差的dropout
         self.attn_dropout = nn.Dropout(args.dropout)
         self.resid_dropout = nn.Dropout(args.dropout)
-        # 构建因果掩码（上三角矩阵），防止信息泄露到未来的token
-        mask = torch.full((1, 1, args.max_seq_len, args.max_seq_len), float("-inf"))
-        mask = torch.triu(mask, diagonal=1)
-        self.register_buffer("mask", mask, persistent=False)
      
      def forward(self,
                 x: torch.Tensor,
                 pos_cis: torch.Tensor,
                 past_key_value: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-                use_cache=False):
+                use_cache=False,
+                attention_mask: Optional[torch.Tensor] = None):
         bsz, seq_len, _ = x.shape
         # 计算查询、键和值
         xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)
@@ -104,13 +101,16 @@ class Attention(nn.Module):
         xq = xq.view(bsz, seq_len, self.n_heads, self.head_dim)
         xk = xk.view(bsz, seq_len, self.n_kv_heads, self.head_dim)
         xv = xv.view(bsz, seq_len, self.n_kv_heads, self.head_dim)
-        # 应用旋转位置编码
+        # 应用旋转位置编码（仅对当前 chunk；cache 中的 K 已带位置）
         xq, xk = apply_rotary_emb(xq, xk, pos_cis)
         # 如果提供了历史KV缓存，则拼接当前KV
         if past_key_value is not None:
             xk = torch.cat([past_key_value[0], xk], dim=1)
             xv = torch.cat([past_key_value[1], xv], dim=1)
         past_kv = (xk, xv) if use_cache else None
+
+        q_len = seq_len
+        kv_len = xk.shape[1]
         # 调整查询、键和值的维度，为多头注意力做准备；对于键和值，需重复复制n_rep次
         xq, xk, xv = (
             xq.transpose(1, 2),
@@ -119,8 +119,21 @@ class Attention(nn.Module):
         )
         # 计算注意力得分，缩放因子为sqrt(head_dim)
         scores = (xq @ xk.transpose(-2, -1)) / math.sqrt(self.head_dim)
-        # 加入因果掩码
-        scores += self.mask[:, :, :seq_len, :seq_len]
+        # 因果掩码：query 行 i 对应绝对位置 offset+i，只能看 key<=offset+i
+        # 形状必须是 (q_len, kv_len)，修复 cache 续写时误用 q_len x q_len 的经典 bug
+        offset = kv_len - q_len
+        causal_ok = torch.ones(q_len, kv_len, device=x.device, dtype=torch.bool).tril(diagonal=offset)
+        scores = scores.masked_fill(~causal_ok.view(1, 1, q_len, kv_len), float("-inf"))
+        # optional padding mask on keys: (batch, kv_len) with 1=keep, 0=pad
+        if attention_mask is not None:
+            key_mask = attention_mask
+            if key_mask.dim() == 2:
+                if key_mask.shape[-1] < kv_len:
+                    # allow shorter mask only when it matches current chunk during prefill mismatch
+                    pad = torch.ones(bsz, kv_len - key_mask.shape[-1], device=key_mask.device, dtype=key_mask.dtype)
+                    key_mask = torch.cat([key_mask, pad], dim=-1)
+                key_mask = key_mask[:, :kv_len]
+                scores = scores.masked_fill(key_mask[:, None, None, :] == 0, float("-inf"))
         # softmax归一化
         scores = F.softmax(scores.float(), dim=-1).type_as(xq)
         scores = self.attn_dropout(scores)
@@ -167,13 +180,14 @@ class SpongeBobBlock(nn.Module):
           # 前馈网络
           self.feed_forward = FeedForward(config)
      
-     def forward(self, x, pos_cis, past_key_value=None, use_cache=False):
+     def forward(self, x, pos_cis, past_key_value=None, use_cache=False, attention_mask=None):
           # 先经过归一化和注意力计算
           h_attn, past_kv = self.attention(
             self.attention_norm(x),
             pos_cis,
             past_key_value=past_key_value,
-            use_cache=use_cache
+            use_cache=use_cache,
+            attention_mask=attention_mask,
           )
           # 残差连接
           h = x + h_attn
@@ -209,6 +223,7 @@ class SpongeBob(PreTrainedModel):
                  input_ids: Optional[torch.Tensor] = None,
                  past_key_values: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None,
                  use_cache: bool = False,
+                 attention_mask: Optional[torch.Tensor] = None,
                  **kwargs
                  ):
           # 如果没有传入KV缓存，则置为None列表
@@ -222,15 +237,11 @@ class SpongeBob(PreTrainedModel):
           
           # 根据输入序列长度获取对应位置编码
           seq_len = input_ids.size(1)
-          # 检查位置编码是否足够，如果不够则动态扩展
           if start_pos + seq_len > self.pos_cis.shape[0]:
-              # 动态扩展位置编码（简单实现，实际可能需要更复杂的逻辑）
-              required_len = start_pos + seq_len
-              current_len = self.pos_cis.shape[0]
-              if required_len > current_len:
-                  # 这里可以扩展位置编码，但为了简单起见，我们限制长度
-                  seq_len = min(seq_len, self.pos_cis.shape[0] - start_pos)
-          
+              raise ValueError(
+                  f"Sequence exceeds RoPE cache: start_pos={start_pos}, seq_len={seq_len}, "
+                  f"max_seq_len={self.pos_cis.shape[0]}"
+              )
           pos_cis = self.pos_cis[start_pos:start_pos + seq_len]
           past_kvs = []
 
@@ -239,7 +250,8 @@ class SpongeBob(PreTrainedModel):
                h, past_kv = layer(
                     h, pos_cis,
                     past_key_value=past_key_values[l],
-                    use_cache=use_cache
+                    use_cache=use_cache,
+                    attention_mask=attention_mask,
                )
                past_kvs.append(past_kv)
           

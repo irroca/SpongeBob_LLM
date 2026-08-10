@@ -7,6 +7,7 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 from model import SpongeBob
 from Config import LLMConfig
+from train_utils import load_weights
 
 def json_converter(obj):
     if isinstance(obj, np.generic):  # numpy.float32, numpy.int64 等
@@ -54,7 +55,7 @@ def calculate_ppl(model, tokenizer, texts, max_length=512, batch_size=4, device=
             attention_mask = encodings.attention_mask.to(device)
             
             # 前向传播
-            outputs = model(input_ids)
+            outputs = model(input_ids, attention_mask=attention_mask)
             logits = outputs.logits
             
             # 计算损失（语言模型任务，目标是预测下一个token）
@@ -180,13 +181,8 @@ def main():
         tokenizer.pad_token = tokenizer.eos_token
     
     # 加载模型配置和权重
-    model = SpongeBob(LLMConfig(max_seq_len=args.max_seq_len))
-    
-    # 加载模型权重
-    state_dict = torch.load(args.model_path, map_location=args.device)
-    # 过滤掉可能不匹配的键（如mask）
-    state_dict = {k: v for k, v in state_dict.items() if 'mask' not in k}
-    model.load_state_dict(state_dict, strict=False)
+    model = SpongeBob(LLMConfig(max_seq_len=args.max_seq_len, vocab_size=tokenizer.vocab_size))
+    load_weights(args.model_path, model, args.device, strict=False)
     
     model = model.to(args.device)
     model.eval()
