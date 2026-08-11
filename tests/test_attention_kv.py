@@ -69,6 +69,57 @@ def test_attention_mask_changes_logits():
 
 
 @torch.no_grad()
+def test_kv_cache_chunk_mask_pads_on_left():
+    """attention_mask covering only the new chunk (len==q_len) during cached decoding must be
+    left-padded with ones for the cached past positions, i.e. equivalent to manually passing a
+    full kv_len mask with ones prepended. Classic bug: padding the short mask on the right
+    instead misapplies it to the start of the cached prefix rather than the new chunk."""
+    model = _tiny_model()
+    model.eval()
+    prefix = torch.randint(0, 128, (1, 5))
+    out1 = model(prefix, use_cache=True)
+    cont = torch.randint(0, 128, (1, 3))
+    chunk_mask = torch.tensor([[1.0, 0.0, 1.0]])  # mask out the middle new-chunk token as a key
+
+    out_chunk = model(cont, past_key_values=out1.past_key_values, use_cache=True, start_pos=5,
+                       attention_mask=chunk_mask)
+
+    full_mask = torch.cat([torch.ones(1, 5), chunk_mask], dim=-1)
+    out_full_equiv = model(cont, past_key_values=out1.past_key_values, use_cache=True, start_pos=5,
+                            attention_mask=full_mask)
+
+    assert torch.allclose(out_chunk.logits, out_full_equiv.logits)
+
+
+@torch.no_grad()
+def test_kv_cache_full_length_mask_used_as_is():
+    model = _tiny_model()
+    model.eval()
+    prefix = torch.randint(0, 128, (1, 5))
+    out1 = model(prefix, use_cache=True)
+    cont = torch.randint(0, 128, (1, 3))
+    kv_len = 8
+    full_mask = torch.ones(1, kv_len)
+    full_mask[0, 1] = 0
+    out = model(cont, past_key_values=out1.past_key_values, use_cache=True, start_pos=5,
+                attention_mask=full_mask)
+    assert out.logits.shape == (1, 3, 128)
+
+
+@torch.no_grad()
+def test_kv_cache_mask_wrong_length_raises():
+    model = _tiny_model()
+    model.eval()
+    prefix = torch.randint(0, 128, (1, 5))
+    out1 = model(prefix, use_cache=True)
+    cont = torch.randint(0, 128, (1, 3))
+    bad_mask = torch.ones(1, 4)  # neither q_len (3) nor kv_len (8)
+    with pytest.raises(ValueError):
+        model(cont, past_key_values=out1.past_key_values, use_cache=True, start_pos=5,
+              attention_mask=bad_mask)
+
+
+@torch.no_grad()
 def test_rope_overflow_raises():
     model = _tiny_model(max_seq_len=16)
     model.eval()

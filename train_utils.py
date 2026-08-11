@@ -1,7 +1,8 @@
-"""Shared training helpers: seed, AMP, LR schedule, checkpoint I/O."""
+"""Shared training helpers: seed, AMP, LR schedule, checkpoint I/O, CLI/wandb."""
 
 from __future__ import annotations
 
+import argparse
 import math
 import os
 import random
@@ -68,6 +69,40 @@ def get_lr(
     progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
     min_lr = 0.1 * lr
     return min_lr + 0.5 * (lr - min_lr) * (1.0 + math.cos(math.pi * progress))
+
+
+def optimizer_step(
+    model: nn.Module,
+    optimizer: optim.Optimizer,
+    scaler: Any,
+    grad_clip: float,
+) -> None:
+    """Unscale (if scaler), clip grad norm, step, update, zero_grad."""
+    if scaler is not None:
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        scaler.step(optimizer)
+        scaler.update()
+    else:
+        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        optimizer.step()
+    optimizer.zero_grad(set_to_none=True)
+
+
+def flush_pending_grads(
+    model: nn.Module,
+    optimizer: optim.Optimizer,
+    scaler: Any,
+    grad_clip: float,
+    pending: bool,
+) -> bool:
+    """If ``pending`` (leftover grads from a partial accumulation window at epoch end),
+    run ``optimizer_step`` and return ``True`` (flushed). Otherwise return ``False``.
+    """
+    if pending:
+        optimizer_step(model, optimizer, scaler, grad_clip)
+        return True
+    return False
 
 
 def save_checkpoint(
@@ -143,3 +178,65 @@ def load_train_state(
         int(checkpoint.get("global_step", 0)),
         float(checkpoint.get("loss", float("inf"))),
     )
+
+
+def add_common_train_args(
+    parser: argparse.ArgumentParser,
+    *,
+    save_dir: str = "results",
+    epochs: int = 1,
+    batch_size: int = 8,
+    learning_rate: float = 1e-4,
+    dtype: str = "float32",
+    num_workers: int = 0,
+    accumulation_steps: int = 1,
+    grad_clip: float = 1.0,
+    log_step: int = 10,
+    save_step: int = 1000,
+    max_seq_len: int = 512,
+    data_path: str = "datasets/pretrain.jsonl",
+    resume_from: Optional[str] = None,
+    seed: int = 1337,
+    wandb_project: str = "SpongeBob",
+) -> argparse.ArgumentParser:
+    """Add the CLI flags shared by every training entry point (pretrain/SFT/distill/dpo).
+
+    Each script passes its own defaults via keyword args (e.g. ``learning_rate``,
+    ``wandb_project``, ``data_path``) and then adds any stage-specific extras
+    (``--pretrained_path``, ``--teacher_path``, ``--beta``, ...) after calling this.
+    ``--device`` always defaults to ``"cuda"`` if a GPU is available, else ``"cpu"``.
+    """
+    parser.add_argument("--save_dir", type=str, default=save_dir)
+    parser.add_argument("--epochs", type=int, default=epochs)
+    parser.add_argument("--batch_size", type=int, default=batch_size)
+    parser.add_argument("--learning_rate", type=float, default=learning_rate)
+    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--use_wandb", type=str2bool, default=False)
+    parser.add_argument("--wandb_project", type=str, default=wandb_project)
+    parser.add_argument("--dtype", type=str, default=dtype)
+    parser.add_argument("--num_workers", type=int, default=num_workers)
+    parser.add_argument("--accumulation_steps", type=int, default=accumulation_steps)
+    parser.add_argument("--grad_clip", type=float, default=grad_clip)
+    parser.add_argument("--log_step", type=int, default=log_step)
+    parser.add_argument("--save_step", type=int, default=save_step)
+    parser.add_argument("--max_seq_len", type=int, default=max_seq_len)
+    parser.add_argument("--data_path", type=str, default=data_path)
+    parser.add_argument("--resume_from", type=str, default=resume_from)
+    parser.add_argument("--seed", type=int, default=seed)
+    return parser
+
+
+def init_wandb_if_needed(args: Any, run_name: Optional[str] = None) -> Any:
+    """Initialize wandb (via the ``swanlab`` shim) when ``args.use_wandb`` is set.
+
+    Returns the wandb-like module on success, or ``None`` when logging is disabled.
+    The import is lazy: ``swanlab`` is an optional dependency (see requirements.txt)
+    and is only required if a caller actually passes ``--use_wandb True``.
+    """
+    if not getattr(args, "use_wandb", False):
+        return None
+    import swanlab as wandb  # noqa: F811
+
+    name = run_name or f"run-bs{getattr(args, 'batch_size', '?')}"
+    wandb.init(project=args.wandb_project, name=name, config=vars(args))
+    return wandb
