@@ -9,6 +9,7 @@ import sys
 from transformers import AutoTokenizer
 from model import SpongeBob
 from Config import LLMConfig
+from train_utils import load_weights
 
 # 彩色输出工具类
 class Colors:
@@ -37,12 +38,13 @@ def init_model(args):
         model_files = {
             0: 'pretrain.pth',  # 预训练模型
             1: 'SFT.pth',       # SFT模型
-            2: 'distill.pth'    # 蒸馏模型
+            2: 'distill.pth',   # 蒸馏模型
+            3: 'dpo.pth',       # DPO模型
         }
         
         if args.model_mode not in model_files:
             print(colored_text(f"错误: 不支持的模型模式 {args.model_mode}", Colors.RED))
-            print(colored_text("请使用: 0(预训练), 1(SFT), 2(蒸馏)", Colors.YELLOW))
+            print(colored_text("请使用: 0(预训练), 1(SFT), 2(蒸馏), 3(DPO)", Colors.YELLOW))
             sys.exit(1)
             
         ckp_path = os.path.join(args.save_dir, model_files[args.model_mode])
@@ -51,8 +53,9 @@ def init_model(args):
             # 尝试加载checkpoint文件
             checkpoint_files = {
                 0: ['pretrain_final.pth', 'latest_checkpoint.pth'],
-                1: ['sft_final.pth', 'sft_latest_checkpoint.pth'],
-                2: ['distill_final.pth', 'distill_latest_checkpoint.pth']
+                1: ['sft_final.pth', 'SFT.pth', 'latest_checkpoint.pth'],
+                2: ['distill_final.pth', 'latest_checkpoint.pth'],
+                3: ['dpo_final.pth', 'latest_checkpoint.pth'],
             }
             
             for candidate in checkpoint_files[args.model_mode]:
@@ -75,18 +78,7 @@ def init_model(args):
         )
         
         model = SpongeBob(model_config)
-        
-        # 加载模型权重
-        if ckp_path.endswith('.pth'):
-            state_dict = torch.load(ckp_path, map_location=args.device)
-            # 过滤掉可能不匹配的键
-            state_dict = {k: v for k, v in state_dict.items() if 'mask' not in k}
-            model.load_state_dict(state_dict, strict=False)
-        else:
-            from transformers import AutoModel
-            pretrained_model = AutoModel.from_pretrained(ckp_path)
-            model.load_state_dict(pretrained_model.state_dict(), strict=False)
-        
+        load_weights(ckp_path, model, args.device, strict=False)
         model = model.eval().to(args.device)
         
         # 计算参数量
@@ -125,7 +117,7 @@ def streaming_generation(model, tokenizer, prompt, args):
                 top_p=args.top_p,
                 stream=True,
                 pad_token_id=tokenizer.pad_token_id,
-                rp=args.repetition_penalty
+                repetition_penalty=args.repetition_penalty
             )
             
             # 流式输出
@@ -160,17 +152,17 @@ def main():
     parser = argparse.ArgumentParser(description="SpongeBob模型交互式对话")
     
     # 模型参数
-    parser.add_argument('--save_dir', default='sample_pth', type=str, 
+    parser.add_argument('--save_dir', default='results', type=str, 
                        help='模型保存目录')
-    parser.add_argument('--model_mode', default=1, type=int, choices=[0, 1, 2],
-                       help='模型模式: 0-预训练, 1-SFT聊天, 2-蒸馏')
+    parser.add_argument('--model_mode', default=1, type=int, choices=[0, 1, 2, 3],
+                       help='模型模式: 0-预训练, 1-SFT聊天, 2-蒸馏, 3-DPO')
     
     # 生成参数
     parser.add_argument('--temperature', default=0.7, type=float,
                        help='生成温度，越高越随机')
     parser.add_argument('--top_p', default=0.9, type=float,
                        help='核采样概率')
-    parser.add_argument('--repetition_penalty', default=2.0, type=float,
+    parser.add_argument('--repetition_penalty', default=1.2, type=float,
                        help='重复惩罚系数')
     parser.add_argument('--max_new_tokens', default=512, type=int,
                        help='最大生成token数')
@@ -182,7 +174,7 @@ def main():
                        help='保留的历史对话轮数')
     parser.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu', 
                        type=str, help='运行设备')
-    parser.add_argument('--show_prompt', default=True ,action='store_true',
+    parser.add_argument('--show_prompt', action='store_true',
                        help='显示实际发送给模型的prompt')
     
     args = parser.parse_args()
@@ -190,7 +182,7 @@ def main():
     # 打印配置信息
     print(colored_text("=== SpongeBob模型对话系统 ===", Colors.BOLD + Colors.CYAN))
     print(colored_text(f"设备: {args.device}", Colors.YELLOW))
-    print(colored_text(f"模型模式: {['预训练', 'SFT聊天', '蒸馏'][args.model_mode]}", Colors.YELLOW))
+    print(colored_text(f"模型模式: {['预训练', 'SFT聊天', '蒸馏', 'DPO'][args.model_mode]}", Colors.YELLOW))
     print(colored_text("输入 'quit' 或 'exit' 退出对话", Colors.YELLOW))
     print(colored_text("=" * 40, Colors.CYAN))
     
@@ -233,8 +225,12 @@ def main():
                     add_generation_prompt=True
                 )
             
-            # 截断到最大长度
-            prompt = prompt[-args.max_seq_len + args.max_new_tokens:]
+            # 截断到最大长度（按 token 计）
+            max_prompt_tokens = max(8, args.max_seq_len - args.max_new_tokens)
+            prompt_ids = tokenizer.encode(prompt)
+            if len(prompt_ids) > max_prompt_tokens:
+                prompt_ids = prompt_ids[-max_prompt_tokens:]
+                prompt = tokenizer.decode(prompt_ids)
             
             if args.show_prompt:
                 print(colored_text(f"实际Prompt: {prompt}", Colors.MAGENTA))
