@@ -171,6 +171,28 @@ completion_len truncated_frac entropy kl clip_frac ratio_mean grad_norm adv_abs_
 `silent_group_frac` 是组内奖励全相同的比例：这些组优势全零、梯度恒为 0。CPU smoke 里能直接看到
 `silent=1.00` 的那一步 `gnorm=0.0000`，这就是 DAPO dynamic sampling 要解决的问题。
 
+用 `analyze_grpo.py` 做窗口平均并排比多组消融：
+
+```bash
+python3 analyze_grpo.py results_a/grpo_metrics.jsonl results_b/grpo_metrics.jsonl --window 25
+```
+
+### CPU 上已经跑出来的两个现象（详见 `docs/experiments.md`）
+
+同样的 29M 策略、同样的 lr 和 seed，只差一个 `--kl_coeff 0.02`：
+
+| steps | 无 KL 的 format rate | KL=0.02 的 format rate |
+|-------|---------------------|------------------------|
+| 25–49 | **0.296**（峰值） | 0.475 |
+| 50–74 | 0.000 | 0.637 |
+| 125–149 | 0.000 | **0.915** |
+
+1. **零奖励是 GRPO 的吸收态**：无 KL 的那一组在第 50 步左右熵从 3.75 掉到 1.3、策略退化成反复输出
+   `<think>`，此后奖励恒 0 → 优势恒 0 → `grad_norm` 恒 0，剩下 100 步完全没有梯度，再也起不来。
+2. **它学会的只有格式**：两组的 accuracy 全程 0.000，而 `hack_rate` 与 `format_rate` 完全重合——
+   每一条格式正确的输出答案都是错的。策略把唯一够得着的奖励分量刷满了。单看一条 reward 曲线
+   会误以为在稳步进步，这正是环境要把 accuracy / format 分开上报的原因。
+
 ## 算法要点
 
 - **KD**（`distill.py`）：冻结 teacher，学生优化  
