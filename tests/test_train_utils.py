@@ -108,6 +108,26 @@ def test_add_common_train_args_allows_stage_specific_extras():
     assert args.save_dir == "results"
 
 
+def test_add_common_train_args_can_skip_flags_a_stage_does_not_have():
+    """GRPO is driven by --rl_steps over env-sampled prompts, so it has no epochs."""
+    parser = argparse.ArgumentParser()
+    add_common_train_args(parser, skip=("epochs", "accumulation_steps"))
+    parser.add_argument("--rl_steps", type=int, default=20)
+
+    args = parser.parse_args([])
+
+    assert not hasattr(args, "epochs")
+    assert not hasattr(args, "accumulation_steps")
+    assert args.rl_steps == 20
+    assert args.save_dir == "results"
+
+
+def test_add_common_train_args_rejects_unknown_skip():
+    parser = argparse.ArgumentParser()
+    with pytest.raises(ValueError):
+        add_common_train_args(parser, skip=("not_a_flag",))
+
+
 def test_init_wandb_if_needed_returns_none_when_disabled():
     args = argparse.Namespace(use_wandb=False, wandb_project="p", batch_size=2)
     assert init_wandb_if_needed(args) is None
