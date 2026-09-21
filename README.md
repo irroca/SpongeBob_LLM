@@ -23,13 +23,68 @@ pip install -r requirements.txt
 |------|------|
 | `model.py` / `Config.py` | 模型与配置 |
 | `dataset.py` | Pretrain / SFT / Preference(DPO) 数据 |
+| `datatools/` | 语料统计、MinHash 去重、污染检查 |
 | `train_utils.py` / `losses.py` | 共享训练工具与 CE/KD/DPO/GRPO loss |
 | `envs/` | 可验证奖励环境（RLVR）与数据生成 |
 | `rollout.py` | GRPO 在线采样：分组 rollout、completion mask、logprob |
 | `pretrain.py` / `SFT.py` / `distill.py` / `dpo.py` / `grpo.py` | 各阶段训练入口 |
-| `eval_ppl.py` / `chat.py` | 困惑度评估与交互式生成 |
+| `eval_ppl.py` / `chat.py` / `analyze_grpo.py` | 困惑度评估、交互式生成、RL 指标分析 |
 | `tests/` | CPU 单元测试与小型 fixtures |
 | `docs/experiments.md` | 本地 GPU 实验记录模板 |
+
+## 模型结构由 CLI 决定
+
+五个训练脚本加上 `eval_ppl.py` / `chat.py` 都通过 `train_utils.add_model_args` 暴露
+`--dim` / `--n_layers` / `--n_heads` / `--n_kv_heads` / `--hidden_dim` / `--dropout` /
+`--rope_theta` 以及 `--tokenizer_path`，做尺寸消融不需要改源码：
+
+```bash
+python3 pretrain.py --dim 256 --n_layers 6 --n_kv_heads 2 --data_path datasets/pretrain.jsonl
+python3 SFT.py --pretrained_path results/pretrain_final.pth   # 架构自动沿用，不必重复声明
+```
+
+`resolve_model_config` 的优先级是 **显式 CLI > checkpoint 记录 > 库默认值**。这一层不只是省参数：
+`load_state_dict(strict=False)` 在形状不匹配时会报错，但对**缺失的键是静默容忍**的——把 6 层的
+checkpoint 加载进 8 层模型，多出来的两层会保持随机初始化且毫无提示。现在这种情况会告警。
+
+- `*_final.pth` 仍然是纯 `state_dict`，但同时会写一个 `*.config.json` sidecar。原因是
+  **`n_heads` 无法从张量形状反推**（`head_dim = dim // n_heads`，所以 `wq` 永远是 `dim × dim`，
+  只有 kv/q 的比例可见）。没有 sidecar 时只能假设 `n_heads` 并告警。
+- checkpoint 的 `vocab_size` 与 tokenizer 不一致会直接报错。**重训 tokenizer 会让旧权重失效**，
+  这一点在换语料时几乎必踩。
+- 因此 `distill.py` 现在能做**真正的跨尺寸蒸馏**：teacher 和 student 各自从自己的 checkpoint
+  解析架构，只要求共享 vocab。
+
+## 数据工具（`datatools/`）
+
+换语料前先跑这两个。四种数据 schema（`text` / `conversations` / `prompt+chosen+rejected` /
+`question+answer`）会自动识别，不需要指定。
+
+```bash
+# 语料统计：schema 合法性、长度分位数、语种混合、重复率、单文档重复度
+python3 -m datatools.stats datasets/raw.jsonl --tokenizer ./spongebob_tokenizer --json stats.json
+
+# 去重：精确 + MinHash 近重复，可选对评测集做污染检查
+python3 -m datatools.dedup datasets/raw.jsonl --out datasets/clean.jsonl \
+  --threshold 0.8 --against datasets/eval.jsonl --report dedup.json
+```
+
+`stats` 会报几个直接决定能不能训的东西：
+
+- **malformed 行**按行号报出来并跳过，大 dump 里的一行坏数据不该让整个任务挂掉
+- **repetition_ratio**（单文档内重复的字符 n-gram 占比）能抓出 boilerplate 循环和退化爬虫结果
+- **preference 的长度偏置**：`chosen` 如果系统性更长，DPO 会顺带学到「越长越好」，
+  超过 70% 时会直接告警。这件事一旦开训就看不见了
+
+`dedup` 的 MinHash 是直接在 numpy 上实现的（不依赖 `datasketch`）：
+
+- shingle 用**字符 n-gram**，因为中文没有空格分词
+- 置换系数做了上界约束，`a*h + b < 2^63`，uint64 不会回绕——这是一个诚实的 universal hash
+  族，而不是依赖溢出行为
+- LSH 只负责挑候选，**每个候选都会用完整签名复核**，所以分带只影响召回和速度，
+  不会引入低于阈值的误判。`--bands` / `--rows` 可以手动调这个权衡，报告里会打印实际的
+  S 曲线中点
+- 污染检查匹配的是 **prompt** 而不是整条记录：同一道题配不同答案仍然是泄漏
 
 ## 快速跑通（CPU smoke）
 

@@ -56,6 +56,30 @@ rather than duplicating commands here.
  curves can be plotted with no tracker installed.
 - Installed with a recent major `transformers` (5.x) and `torch` 2.x CPU; the model code (custom
   `PreTrainedModel`/`PretrainedConfig` subclasses) is compatible with these.
+- **Model architecture is CLI-configurable, and checkpoints carry their own architecture.**
+ `train_utils.add_model_args(parser)` adds `--tokenizer_path` plus `--dim`/`--n_layers`/
+ `--n_heads`/`--n_kv_heads`/`--hidden_dim`/`--multiple_of`/`--norm_eps`/`--rope_theta`/`--dropout`
+ to all five training scripts and to `eval_ppl.py`/`chat.py`. Every arch flag defaults to `None`
+ so `resolve_model_config(args, vocab_size, checkpoint_path=...)` can apply the precedence
+ **explicit CLI > checkpoint > `LLMConfig` default**. Never hardcode `LLMConfig(...)` in a script
+ again.
+  - `n_heads` is **not** recoverable from tensor shapes (`head_dim = dim // n_heads`, so `wq` is
+    always `dim x dim`; only the kv/q ratio is visible). `save_final_weights` therefore writes a
+    `*.config.json` sidecar next to each bare `*_final.pth`; resolving from shapes alone warns
+    that `n_heads` was assumed.
+  - A checkpoint/tokenizer `vocab_size` mismatch raises. Retraining the tokenizer invalidates old
+    weights — expect this when swapping corpora.
+  - `load_weights` now warns on missing/unexpected keys: `strict=False` raises on shape mismatch
+    but silently tolerates *absent* keys, which would leave whole layers randomly initialized.
+  - `distill.py` resolves teacher and student architectures independently from their own
+    checkpoints, so cross-size KD works; they only need a shared vocab.
+- **Dataset inspection lives in `datatools/`** (`python3 -m datatools.stats`,
+ `python3 -m datatools.dedup`). `datatools/records.py` is the shared schema layer: it detects
+ `text` / `conversations` / `prompt+chosen+rejected` / `question+answer` automatically, so tools
+ should never take a `--schema` flag. `datatools/minhash.py` is a self-contained MinHash+LSH
+ implementation on numpy (no `datasketch` dependency); its permutation coefficients are bounded so
+ uint64 arithmetic never wraps — don't "simplify" that away. LSH proposes candidates and every
+ candidate is verified against the full signature, so banding only trades recall for speed.
 - **Common training CLI flags come from `train_utils.add_common_train_args(parser, **overrides)`**
  (`--save_dir`, `--epochs`, `--batch_size`, `--learning_rate`, `--device`, `--use_wandb`,
  `--wandb_project`, `--dtype`, `--num_workers`, `--accumulation_steps`, `--grad_clip`, `--log_step`,
