@@ -6,8 +6,7 @@ import numpy as np
 from tqdm import tqdm
 from transformers import AutoTokenizer
 from model import SpongeBob
-from Config import LLMConfig
-from train_utils import load_weights
+from train_utils import add_model_args, describe_model, load_weights, resolve_model_config
 
 def json_converter(obj):
     if isinstance(obj, np.generic):  # numpy.float32, numpy.int64 等
@@ -176,26 +175,28 @@ def main():
                        help="Device to use for evaluation")
     parser.add_argument('--output_file', default = 'eval_result.json',type=str, 
                        help="File to save evaluation results")
-    
+    add_model_args(parser)
+
     args = parser.parse_args()
     
     # 加载tokenizer和模型
     print("Loading tokenizer and model...")
-    tokenizer = AutoTokenizer.from_pretrained('./spongebob_tokenizer')
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_path)
     
     # 确保tokenizer有pad_token
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     
-    # 加载模型配置和权重
-    model = SpongeBob(LLMConfig(max_seq_len=args.max_seq_len, vocab_size=tokenizer.vocab_size))
+    # 架构取自被评估的 checkpoint，避免用默认配置加载出半随机初始化的模型
+    config = resolve_model_config(args, tokenizer.vocab_size, checkpoint_path=args.model_path)
+    model = SpongeBob(config)
     load_weights(args.model_path, model, args.device, strict=False)
     
     model = model.to(args.device)
     model.eval()
     
     print(f"Model loaded from {args.model_path}")
-    print(f"Model parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6:.2f}M")
+    print(describe_model(model, config))
     
     # 加载数据集
     print("Loading dataset...")

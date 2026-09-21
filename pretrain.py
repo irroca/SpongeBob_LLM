@@ -10,20 +10,24 @@ from torch import optim
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 
-from Config import LLMConfig
 from dataset import PretrainDataset
 from losses import masked_cross_entropy
 from model import SpongeBob
 from train_utils import (
     add_common_train_args,
+    add_model_args,
     build_autocast_scaler,
+    describe_model,
     flush_pending_grads,
     get_lr,
     init_wandb_if_needed,
     load_train_state,
     load_weights,
     optimizer_step,
+    optimizer_step,
+    resolve_model_config,
     save_checkpoint,
+    save_final_weights,
     set_seed,
 )
 
@@ -84,13 +88,16 @@ def main():
         wandb_project="SpongeBob-Pretrain",
         data_path="datasets/pretrain.jsonl",
     )
+    add_model_args(parser)
     args = parser.parse_args()
 
     os.makedirs(args.save_dir, exist_ok=True)
     set_seed(args.seed)
 
-    tokenizer = AutoTokenizer.from_pretrained("./spongebob_tokenizer")
-    args.lm_config = LLMConfig(max_seq_len=args.max_seq_len, vocab_size=tokenizer.vocab_size)
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_path)
+    args.lm_config = resolve_model_config(
+        args, tokenizer.vocab_size, checkpoint_path=args.resume_from
+    )
     model = SpongeBob(args.lm_config).to(args.device)
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate)
     ctx, scaler = build_autocast_scaler(args.device, args.dtype)
@@ -101,7 +108,7 @@ def main():
         if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
             start_epoch, start_step, global_step, _ = load_train_state(ckpt, optimizer, scaler)
 
-    print(f"LLM parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6:.3f}M")
+    print(describe_model(model, args.lm_config, "pretrain"))
 
     wandb = init_wandb_if_needed(args, run_name=f"pretrain-bs{args.batch_size}")
 
@@ -120,7 +127,7 @@ def main():
             model, optimizer, scaler, epoch + 1, 0, global_step, last_loss, args.lm_config,
         )
 
-    torch.save(model.state_dict(), f"{args.save_dir}/pretrain_final.pth")
+    save_final_weights(f"{args.save_dir}/pretrain_final.pth", model, args.lm_config)
     print("Training completed!")
 
 
