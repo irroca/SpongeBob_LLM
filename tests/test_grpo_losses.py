@@ -148,6 +148,23 @@ def test_aggregation_modes_use_different_denominators():
     assert dr == pytest.approx(-5.0 / 8.0)  # 5 tokens / (2 * 4)
 
 
+def test_on_policy_seq_mean_loss_is_zero_while_token_mean_leaks_length_bias():
+    """Advantages sum to zero within a group, so with per-sequence length
+    normalization the on-policy loss value is identically 0 and all the signal
+    sits in the gradient. token_mean weights a sequence by its length instead,
+    so unequal lengths make the loss nonzero — the bias Dr. GRPO removes."""
+    logprobs = torch.zeros(2, 4)
+    old = torch.zeros(2, 4)
+    advantages = torch.tensor([1.0, -1.0])
+    mask = torch.tensor([[1.0, 1.0, 0.0, 0.0], [1.0, 1.0, 1.0, 1.0]])
+
+    seq, _ = grpo_policy_loss(logprobs, old, advantages, mask, aggregation="seq_mean")
+    token, _ = grpo_policy_loss(logprobs, old, advantages, mask, aggregation="token_mean")
+
+    assert seq == pytest.approx(0.0, abs=1e-6)
+    assert token == pytest.approx(1.0 / 3.0, abs=1e-6)
+
+
 def test_dr_grpo_requires_a_length_budget():
     with pytest.raises(ValueError):
         grpo_policy_loss(

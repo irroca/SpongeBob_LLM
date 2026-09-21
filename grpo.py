@@ -82,7 +82,10 @@ def policy_update(policy, optimizer, scaler, batch, advantages, old_logprobs, re
     )
     micro = resolve_micro_batch(batch.n_sequences, args.micro_batch_size)
     policy.train()
-    stats = {"loss": 0.0, "policy_loss": 0.0, "kl": 0.0, "entropy": 0.0, "clip_frac": 0.0, "ratio_mean": 0.0}
+    stats = {
+        "loss": 0.0, "policy_loss": 0.0, "kl": 0.0, "entropy": 0.0,
+        "clip_frac": 0.0, "ratio_mean": 0.0, "grad_norm": 0.0,
+    }
 
     for _ in range(args.ppo_epochs):
         optimizer.zero_grad(set_to_none=True)
@@ -130,13 +133,14 @@ def policy_update(policy, optimizer, scaler, batch, advantages, old_logprobs, re
             stats["clip_frac"] += chunk_metrics["clip_frac"] * weight
             stats["ratio_mean"] += chunk_metrics["ratio_mean"] * weight
 
-        optimizer_step(policy, optimizer, scaler, args.grad_clip)
+        stats["grad_norm"] += optimizer_step(policy, optimizer, scaler, args.grad_clip)
 
     token_weight = max(batch.n_tokens * args.ppo_epochs, 1.0)
     for key in ("entropy", "clip_frac", "ratio_mean"):
         stats[key] /= token_weight
-    for key in ("loss", "policy_loss", "kl"):
+    for key in ("loss", "policy_loss", "kl", "grad_norm"):
         stats[key] /= args.ppo_epochs
+    stats["adv_abs_mean"] = float(advantages.abs().mean())
     return stats
 
 
@@ -264,6 +268,18 @@ def main():
         f"std_norm={args.normalize_advantage_std} filter_zero_var={args.filter_zero_variance}"
     )
 
+    def write_record(record: dict) -> None:
+        with open(metrics_path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        if wandb is not None:
+            wandb.log(record)
+
+    if args.eval_every:
+        # Step 0 baseline, so an accuracy curve starts at the policy it was initialized from.
+        baseline = {"step": 0, **evaluate(policy, tokenizer, env, eval_tasks, args)}
+        write_record(baseline)
+        print(f"step 0 (init) eval: acc={baseline['eval_accuracy']:.3f} fmt={baseline['eval_format_rate']:.3f}")
+
     rng = torch.Generator().manual_seed(args.seed)
     for step in range(1, args.rl_steps + 1):
         started = time.time()
@@ -297,7 +313,10 @@ def main():
 
         if not rollouts:
             # Every group agreed, so every advantage is zero: nothing to learn from.
-            record.update(loss=0.0, policy_loss=0.0, kl=0.0, entropy=0.0, clip_frac=0.0, ratio_mean=1.0)
+            record.update(
+                loss=0.0, policy_loss=0.0, kl=0.0, entropy=0.0,
+                clip_frac=0.0, ratio_mean=1.0, grad_norm=0.0, adv_abs_mean=0.0,
+            )
         else:
             batch = collate_rollouts(rollouts, tokenizer.pad_token_id)
             advantages = grpo_advantages(
@@ -320,10 +339,7 @@ def main():
         if args.eval_every and (step % args.eval_every == 0 or step == args.rl_steps):
             record.update(evaluate(policy, tokenizer, env, eval_tasks, args))
 
-        with open(metrics_path, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
-        if wandb is not None:
-            wandb.log(record)
+        write_record(record)
 
         if step % args.log_step == 0:
             print(
@@ -331,8 +347,8 @@ def main():
                 f"acc={record['accuracy']:.2f} fmt={record['format_rate']:.2f} "
                 f"hack={record['hack_rate']:.2f} silent={record['silent_group_frac']:.2f} "
                 f"len={record['completion_len']:.1f} kl={record['kl']:.4f} "
-                f"ent={record['entropy']:.3f} loss={record['loss']:.4f} lr={lr:.2e} "
-                f"({record['sec']}s)"
+                f"ent={record['entropy']:.3f} |adv|={record['adv_abs_mean']:.3f} "
+                f"gnorm={record['grad_norm']:.4f} lr={lr:.2e} ({record['sec']}s)"
             )
             if "eval_accuracy" in record:
                 print(f"  eval: acc={record['eval_accuracy']:.3f} fmt={record['eval_format_rate']:.3f}")

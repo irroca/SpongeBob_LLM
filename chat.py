@@ -40,11 +40,12 @@ def init_model(args):
             1: 'SFT.pth',       # SFT模型
             2: 'distill.pth',   # 蒸馏模型
             3: 'dpo.pth',       # DPO模型
+            4: 'grpo.pth',      # GRPO/RLVR模型
         }
         
         if args.model_mode not in model_files:
             print(colored_text(f"错误: 不支持的模型模式 {args.model_mode}", Colors.RED))
-            print(colored_text("请使用: 0(预训练), 1(SFT), 2(蒸馏), 3(DPO)", Colors.YELLOW))
+            print(colored_text("请使用: 0(预训练), 1(SFT), 2(蒸馏), 3(DPO), 4(GRPO)", Colors.YELLOW))
             sys.exit(1)
             
         ckp_path = os.path.join(args.save_dir, model_files[args.model_mode])
@@ -56,6 +57,7 @@ def init_model(args):
                 1: ['sft_final.pth', 'SFT.pth', 'latest_checkpoint.pth'],
                 2: ['distill_final.pth', 'latest_checkpoint.pth'],
                 3: ['dpo_final.pth', 'latest_checkpoint.pth'],
+                4: ['grpo_final.pth', 'latest_checkpoint.pth'],
             }
             
             for candidate in checkpoint_files[args.model_mode]:
@@ -154,8 +156,8 @@ def main():
     # 模型参数
     parser.add_argument('--save_dir', default='results', type=str, 
                        help='模型保存目录')
-    parser.add_argument('--model_mode', default=1, type=int, choices=[0, 1, 2, 3],
-                       help='模型模式: 0-预训练, 1-SFT聊天, 2-蒸馏, 3-DPO')
+    parser.add_argument('--model_mode', default=1, type=int, choices=[0, 1, 2, 3, 4],
+                       help='模型模式: 0-预训练, 1-SFT聊天, 2-蒸馏, 3-DPO, 4-GRPO')
     
     # 生成参数
     parser.add_argument('--temperature', default=0.7, type=float,
@@ -182,7 +184,7 @@ def main():
     # 打印配置信息
     print(colored_text("=== SpongeBob模型对话系统 ===", Colors.BOLD + Colors.CYAN))
     print(colored_text(f"设备: {args.device}", Colors.YELLOW))
-    print(colored_text(f"模型模式: {['预训练', 'SFT聊天', '蒸馏', 'DPO'][args.model_mode]}", Colors.YELLOW))
+    print(colored_text(f"模型模式: {['预训练', 'SFT聊天', '蒸馏', 'DPO', 'GRPO'][args.model_mode]}", Colors.YELLOW))
     print(colored_text("输入 'quit' 或 'exit' 退出对话", Colors.YELLOW))
     print(colored_text("=" * 40, Colors.CYAN))
     

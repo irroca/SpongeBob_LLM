@@ -74,6 +74,19 @@ def test_optimizer_step_clips_grad_norm():
     assert model.weight.grad is None
 
 
+def test_optimizer_step_returns_pre_clip_grad_norm():
+    """GRPO logs this because its on-policy loss value is ~0 by construction."""
+    model, optimizer = _tiny_model_and_optimizer()
+    x = torch.randn(8, 4) * 100
+    model(x).sum().backward()
+    expected = float(model.weight.grad.norm())
+
+    reported = optimizer_step(model, optimizer, scaler=None, grad_clip=0.5)
+
+    assert reported == pytest.approx(expected, rel=1e-5)
+    assert reported > 0.5  # pre-clip value, not the clipped one
+
+
 def test_add_common_train_args_uses_overridden_defaults():
     parser = argparse.ArgumentParser()
     add_common_train_args(

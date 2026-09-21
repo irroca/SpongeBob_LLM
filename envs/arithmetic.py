@@ -16,21 +16,15 @@ so the format reward is a prerequisite rather than a free bonus. Setting
 is the knob for measuring how much of a low score is a formatting failure
 versus an arithmetic failure.
 
-Run as a module to emit training data for the other stages::
-
-    python3 -m envs.arithmetic --split sft        --n 2000 --out datasets/arith_sft.jsonl
-    python3 -m envs.arithmetic --split preference --n 1000 --out datasets/arith_pref.jsonl
-    python3 -m envs.arithmetic --split eval       --n 200  --out datasets/arith_eval.jsonl
+``envs.generate_data`` turns the same env into SFT / DPO / eval datasets so all
+four post-training stages can be compared on one task.
 """
 
 from __future__ import annotations
 
-import argparse
-import json
-import os
 import random
 import re
-from typing import Iterable, Sequence
+from typing import Sequence
 
 from .base import Reward, Task, TaskEnv, register_env
 
@@ -221,66 +215,3 @@ class ArithmeticEnv(TaskEnv):
         if mode == "no_tags":
             return f"答案是 {answer}。"
         return f"{THINK_OPEN}{THINK_CLOSE}{ANSWER_OPEN}{answer + rng.choice([-2, 2])}{ANSWER_CLOSE}"
-
-
-def _write_jsonl(path: str, rows: Iterable[dict]) -> int:
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    count = 0
-    with open(path, "w", encoding="utf-8") as fh:
-        for row in rows:
-            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
-            count += 1
-    return count
-
-
-def build_rows(env: ArithmeticEnv, split: str, n: int, rng: random.Random) -> list[dict]:
-    rows = []
-    for task in env.sample(n):
-        prompt = env.render(task)
-        if split == "sft":
-            rows.append(
-                {
-                    "conversations": [
-                        {"role": "user", "content": prompt},
-                        {"role": "assistant", "content": env.gold_completion(task)},
-                    ]
-                }
-            )
-        elif split == "preference":
-            rows.append(
-                {
-                    "prompt": prompt,
-                    "chosen": env.gold_completion(task),
-                    "rejected": env.corrupt_completion(task, rng),
-                }
-            )
-        elif split == "eval":
-            rows.append({"question": task.question, "answer": task.answer, **task.meta})
-        else:
-            raise ValueError(f"Unknown split {split!r}")
-    return rows
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate arithmetic RLVR datasets")
-    parser.add_argument("--split", choices=["sft", "preference", "eval"], required=True)
-    parser.add_argument("--n", type=int, default=1000)
-    parser.add_argument("--out", type=str, required=True)
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--ops", type=str, default="+,-")
-    parser.add_argument("--min_digits", type=int, default=1)
-    parser.add_argument("--max_digits", type=int, default=2)
-    args = parser.parse_args()
-
-    env = ArithmeticEnv(
-        seed=args.seed,
-        ops=tuple(op.strip() for op in args.ops.split(",") if op.strip()),
-        min_digits=args.min_digits,
-        max_digits=args.max_digits,
-    )
-    written = _write_jsonl(args.out, build_rows(env, args.split, args.n, random.Random(args.seed)))
-    print(f"wrote {written} {args.split} rows -> {args.out}")
-
-
-if __name__ == "__main__":
-    main()

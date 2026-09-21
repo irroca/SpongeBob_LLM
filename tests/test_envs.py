@@ -1,16 +1,17 @@
+import json
 import random
 
 import pytest
 
 from envs import ArithmeticEnv, load_tasks, make_env
 from envs.arithmetic import (
-    build_rows,
     extract_tag,
     gold_completion,
     has_valid_format,
     normalize_number,
     parse_answer,
 )
+from envs.generate_data import build_rows, write_jsonl
 
 
 def _completion(think: str, answer: str) -> str:
@@ -155,17 +156,21 @@ def test_build_rows_emits_expected_schemas():
     assert all({"question", "answer"} <= set(r) for r in evals)
 
 
-def test_load_tasks_roundtrip(tmp_path):
-    env = ArithmeticEnv(seed=4)
-    rows = build_rows(env, "eval", 5, random.Random(4))
+def test_build_rows_rejects_unknown_split():
+    with pytest.raises(ValueError):
+        build_rows(ArithmeticEnv(seed=0), "rlhf", 1, random.Random(0))
+
+
+def test_generated_eval_set_roundtrips_through_load_tasks(tmp_path):
     path = tmp_path / "eval.jsonl"
-    path.write_text("\n".join(__import__("json").dumps(r, ensure_ascii=False) for r in rows), "utf-8")
+    rows = build_rows(ArithmeticEnv(seed=4), "eval", 5, random.Random(4))
+    assert write_jsonl(str(path), rows) == 5
 
     tasks = load_tasks(str(path))
 
-    assert len(tasks) == 5
     assert [t.question for t in tasks] == [r["question"] for r in rows]
     assert tasks[0].meta["op"] in ("+", "-")
+    assert json.loads(path.read_text("utf-8").splitlines()[0])["answer"] == rows[0]["answer"]
 
 
 def test_registry_exposes_arithmetic_env():

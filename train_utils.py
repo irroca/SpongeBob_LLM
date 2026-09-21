@@ -76,17 +76,23 @@ def optimizer_step(
     optimizer: optim.Optimizer,
     scaler: Any,
     grad_clip: float,
-) -> None:
-    """Unscale (if scaler), clip grad norm, step, update, zero_grad."""
+) -> float:
+    """Unscale (if scaler), clip grad norm, step, update, zero_grad.
+
+    Returns the pre-clip gradient norm. GRPO needs it: its on-policy loss value
+    is uninformative (see README), so the gradient norm is what shows whether
+    an update carried any signal.
+    """
     if scaler is not None:
         scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
         scaler.step(optimizer)
         scaler.update()
     else:
-        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
         optimizer.step()
     optimizer.zero_grad(set_to_none=True)
+    return float(grad_norm)
 
 
 def flush_pending_grads(
