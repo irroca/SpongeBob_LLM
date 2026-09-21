@@ -17,6 +17,7 @@ policy assigned to them. Three things make this fiddly and they all live here:
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
@@ -224,8 +225,6 @@ def compute_logprobs(
     ctx=None,
 ) -> torch.Tensor:
     """Frozen-graph token log-probs for a whole rollout batch, in micro-batches."""
-    from contextlib import nullcontext
-
     ctx = ctx if ctx is not None else nullcontext()
     was_training = model.training
     model.eval()

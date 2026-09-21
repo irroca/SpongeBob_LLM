@@ -175,8 +175,13 @@ def build_env(args):
     return make_env(args.env, **kwargs)
 
 
-def check_length_budget(tokenizer, env, args) -> None:
-    probe = build_prompt_ids(tokenizer, env, env.sample_task(), "cpu")
+def check_length_budget(tokenizer, args) -> None:
+    """Fail fast when prompt + generation cannot fit in the RoPE window.
+
+    Uses a throwaway env so the probe draw does not shift the training env's RNG.
+    """
+    probe_env = build_env(args)
+    probe = build_prompt_ids(tokenizer, probe_env, probe_env.sample_task(), "cpu")
     needed = probe.size(0) + args.max_new_tokens
     if needed > args.max_seq_len:
         raise ValueError(
@@ -247,7 +252,7 @@ def main():
             p.requires_grad_(False)
 
     env = build_env(args)
-    check_length_budget(tokenizer, env, args)
+    check_length_budget(tokenizer, args)
 
     # Prompts come from the env generator unless a fixed pool is supplied.
     prompt_pool = load_tasks(args.data_path) if args.data_path else None
