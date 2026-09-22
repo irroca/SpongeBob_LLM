@@ -73,13 +73,30 @@ rather than duplicating commands here.
     but silently tolerates *absent* keys, which would leave whole layers randomly initialized.
   - `distill.py` resolves teacher and student architectures independently from their own
     checkpoints, so cross-size KD works; they only need a shared vocab.
-- **Dataset inspection lives in `datatools/`** (`python3 -m datatools.stats`,
- `python3 -m datatools.dedup`). `datatools/records.py` is the shared schema layer: it detects
- `text` / `conversations` / `prompt+chosen+rejected` / `question+answer` automatically, so tools
- should never take a `--schema` flag. `datatools/minhash.py` is a self-contained MinHash+LSH
- implementation on numpy (no `datasketch` dependency); its permutation coefficients are bounded so
- uint64 arithmetic never wraps — don't "simplify" that away. LSH proposes candidates and every
- candidate is verified against the full signature, so banding only trades recall for speed.
+- **The data pipeline lives in `datatools/`.** `python3 -m datatools.prepare <spec>` runs
+ pull → filter → exact-dedup → decontaminate → split → manifest from a mixture spec
+ (`configs/mixture_v1.json`). Individual stages are also CLIs: `stats`, `filters` (library only),
+ `dedup`, `decontaminate`, `split`, `tokenizer_stats`.
+  - `datatools/records.py` is the shared schema layer: it detects `text` / `conversations` /
+    `prompt+chosen+rejected` / `question+answer` automatically, so **no tool takes a `--schema`
+    flag**. `record_text` joins a record for stats/dedup/split; `record_parts` keeps the pieces
+    separate for decontamination (the joined form inserts `=>` and role prefixes that never occur
+    in natural text and would block n-gram matches); `prompt_text` isolates the input side.
+  - **The whole pipeline is streaming.** Mixture weights are in tokens while corpora are published
+    in documents and bytes, so `prepare` tokenizes as it pulls and stops when a source's share is
+    met. At 10B tokens the corpus is ~30GB; don't add a stage that materializes it.
+  - `datatools/minhash.py` is a self-contained MinHash+LSH implementation on numpy (no
+    `datasketch`); its permutation coefficients are bounded so uint64 arithmetic never wraps —
+    don't "simplify" that away. LSH proposes candidates and every candidate is verified against
+    the full signature, so banding only trades recall for speed. It holds ~1KB per document, so
+    near-dedup is bounded to 1–2M docs and is deliberately **not** part of `prepare`'s pass.
+  - `datatools/decontaminate.py` is the real contamination check (13-gram + optional LCS 0.6,
+    following SmolLM2); `dedup --against` is only exact prompt equality. CJK is split per
+    character and latin per word, and eval items shorter than `n` are indexed at their own length.
+    Very short answers (< `MIN_GRAM` units) fall back to exact matching — a known, tested limit.
+  - `prepare`'s report is meant to be trustworthy: `fill < 100%` plus `ran out of data` means a
+    source was silently down-weighted, and `kept%` excludes records pulled into the tokenization
+    batch but never emitted. Don't regress either.
 - **Common training CLI flags come from `train_utils.add_common_train_args(parser, **overrides)`**
  (`--save_dir`, `--epochs`, `--batch_size`, `--learning_rate`, `--device`, `--use_wandb`,
  `--wandb_project`, `--dtype`, `--num_workers`, `--accumulation_steps`, `--grad_clip`, `--log_step`,

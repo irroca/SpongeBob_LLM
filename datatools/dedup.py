@@ -5,9 +5,17 @@ catches copy-paste. Near-duplicates need MinHash: web text is full of documents
 that differ only in a header or a date, and they inflate a corpus without
 adding information — worse, they get memorized.
 
-Optionally also drops training records whose *prompt* appears in an evaluation
-set (``--against``), which is the contamination check that decides whether an
-eval number means anything.
+Optionally also drops training records whose *prompt* is exactly equal (after
+normalization) to one in an evaluation set (``--against``). That is the cheap
+check; for real contamination use ``datatools.decontaminate``, which matches
+13-grams and therefore also catches a benchmark question embedded in a longer
+web page. Use this flag only when both sides are known to be per-prompt
+records, e.g. two generated task sets.
+
+**Memory bound:** MinHash keeps a signature per surviving document (~1KB at 128
+permutations), so this holds roughly 1–2M documents. For a multi-billion-token
+corpus, run it per source file rather than over the whole mixture — which is
+why ``datatools.prepare`` does only streaming exact dedup inline.
 
 ::
 

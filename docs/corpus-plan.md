@@ -3,6 +3,25 @@
 **目标能力**：可验证任务（算术 / 代码）为主，中英双语可用。
 **状态**：候选清单已核实，配比待消融确认。旧语料全部弃用。
 
+## 已定的决策
+
+| 项 | 决定 | 影响 |
+|----|------|------|
+| 模型规模 | **~100M**（`--dim 768 --n_layers 12 --n_kv_heads 3`，vocab 32k） | 嵌入层占 25.3%，可接受；token 预算 ~10B |
+| 中文语料 | **`epfml/FineWeb2-HQ` 的 `cmn_Hani`** | ODC-By，许可最干净；`CCI3-HQ` 降级为消融 #2 的对照 |
+| 仓库 | **公开** | 许可约束是硬的：回避 MAP-CC（NC-ND），保留 ODC-By 署名 |
+| 正式训练 | **租卡** | 不受 8GB 限制；若显存充足可把模型提到 ~185M / token 提到 18B |
+
+具体命令：
+
+```bash
+python3 pretrain.py --dim 768 --n_layers 12 --n_heads 12 --n_kv_heads 3 \
+  --tokenizer_path ./tokenizer_32k --max_seq_len 2048 --data_path datasets/prepared/train.jsonl
+```
+
+后续阶段（SFT / KD / DPO / GRPO）不需要重复声明架构——`resolve_model_config` 会从
+`--pretrained_path` / `--policy_path` 指向的 checkpoint 自动继承。
+
 ---
 
 ## 0. 三个硬约束，先读这个
@@ -269,29 +288,38 @@ RL 阶段要做算术和代码。这组配比里 34% 是代码和数学，且数
 
 ---
 
-## 6. 待你决策的事项
+## 6. 数据管线（已实现）
 
-1. **模型是否放大到 ~100M（dim768 / L12 / vocab 32k）？**
-   这是其余所有决定的前提。29M + 32k 词表不划算；29M + 6400 词表做不了代码。
-2. **中文语料选 FineWeb2-HQ（许可干净）还是 CCI3-HQ（消融证据足但需同意协议）？**
-   建议两个都拉一点做消融 #2。
-3. **仓库要公开吗？** 如果要，许可证约束就是硬的（回避 MAP-CC，保留 ODC-By 署名）。
-4. **正式训练打算租卡还是本地跑？** 10B token 本地约 3–4 天（需实测校准）。
-   如果租卡，可以把模型放到 ~185M 并且把 token 预算提到 18B。
-5. **项目新名字。** 语料和目标都换了，`SpongeBob_LLM` 这个名字和"中英双语可验证任务"已经不匹配。
+配比写在 `configs/mixture_v1.json` 里，`prepare.py` 按它跑完整流程：
 
----
+```bash
+# 先看一眼各源会取多少、被过滤掉多少，不落盘
+python3 -m datatools.prepare configs/mixture_v1.json --dry_run
 
-## 7. 下一步（等上面决策后）
+# 正式产出（每源一个 JSONL + train/val/holdout + manifest）
+python3 -m datatools.prepare configs/mixture_v1.json --out_dir datasets/prepared
+```
 
-1. 写 `datatools/prepare.py`：按配比清单（JSON/YAML spec）从 HF 流式拉取、转成仓库的 JSONL
-   格式、按 token 预算采样，产物带数据版本记录
-2. 把 `datatools.dedup --against` 升级成 13-gram 去污染
-3. 补 `datatools/filter.py`（长度、语种比例、重复度、黑名单阈值——阈值要看过真实分布再定）
-4. 补 `datatools/split.py`（train/val 划分 + 固定 holdout）
-5. 用清洗后的语料重训 tokenizer（vocab 由消融 #5 定），`train_tokenizer.py` 的硬编码路径顺手修掉
-6. 跑消融 #1 和 #5，定配比和词表
-7. 正式预训练
+流程顺序是 **拉取 → 质量过滤 → 去重 → 去污染 → 划分 → manifest**：
+
+| 阶段 | 模块 | 要点 |
+|------|------|------|
+| 拉取 | `prepare.py` | HF 流式（`streaming=True`），按 token 预算边数边停，不下全量 |
+| 过滤 | `filters.py` | 长度、语种比例、重复度、符号/数字占比、行级重复；每条拒绝都归因到具体规则 |
+| 去重 | `dedup.py` | 精确 + MinHash 近重复（源内） |
+| 去污染 | `decontaminate.py` | 13-gram 重叠 + 可选 LCS 比例，CJK 按字符切、拉丁按词切 |
+| 划分 | `split.py` | 按内容哈希确定性划分，重跑结果一致，同文档不会跨 split |
+
+`manifest.json` 记录每源实际取到的 token / 文档数、各条过滤规则的拒绝计数、去重和去污染的删除量、
+随机种子和 HF revision——这是配比消融能对得上号的前提。
+
+## 7. 下一步
+
+1. 用清洗后的语料重训 tokenizer（vocab 由消融 #5 定，起点 32k），顺手修掉
+   `train_tokenizer.py` 里硬编码的 `pretrain.jsonl` 路径
+2. 跑消融 #1（中文占比）和 #5（词表大小）——它们决定其余所有配置
+3. 按定下的配比产出正式数据集，租卡做 ~100M / ~10B token 的正式预训练
+4. 重建 SFT / DPO / GRPO 阶段的数据（可验证任务部分见 §1.6）
 
 ---
 

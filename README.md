@@ -57,28 +57,71 @@ checkpoint 加载进 8 层模型，多出来的两层会保持随机初始化且
 
 ## 数据工具（`datatools/`）
 
-换语料前先跑这两个。四种数据 schema（`text` / `conversations` / `prompt+chosen+rejected` /
-`question+answer`）会自动识别，不需要指定。
+四种数据 schema（`text` / `conversations` / `prompt+chosen+rejected` / `question+answer`）
+全部自动识别，所以没有任何工具需要 `--schema` 参数。
+
+### 一条命令跑完整管线
+
+配比写在 spec 里（见 `configs/mixture_v1.json`），`prepare` 按它执行
+**拉取 → 质量过滤 → 精确去重 → 去污染 → 划分 → manifest**：
 
 ```bash
-# 语料统计：schema 合法性、长度分位数、语种混合、重复率、单文档重复度
+python3 -m datatools.prepare configs/mixture_v1.json --dry_run          # 先看各源会取多少
+python3 -m datatools.prepare configs/mixture_v1.json --out_dir datasets/prepared
+python3 -m datatools.prepare configs/mixture_v1.json --scale 0.001      # 千分之一预算试跑管线
+```
+
+整条链路是**流式**的：配比按 token 计，而语料按文档和字节发布，所以只能边 tokenize 边记数、
+取满即停。10B token 是约 30GB 文本，任何一步都不能全量进内存。
+
+输出是 `train/val/holdout.jsonl` 加一个 `manifest.json`，后者记录每源实际取到的 token 和文档数、
+**每条过滤规则各拒绝了多少**、去重和去污染的删除量、以及种子。没有这些，配比消融之间无法对账。
+
+报告里两个值得盯的信号：
+
+```text
+source                 target       tokens   fill      docs      read  kept%  tok/doc
+zh_web                 120000        20268   17%       601       653   92%       34
+  ! zh_web ran out of data at 17% of its budget
+```
+
+- `fill < 100%` 且标了 `ran out of data`：这个源被**悄悄降权**了，实际配比已经不是你写的那个
+- `kept%` 是真实的过滤通过率（缓冲区里取进来但没用上的记录会从 `read` 里扣掉，
+  否则一个干净的源会看起来像被过滤掉了大半）
+
+### 单独使用
+
+```bash
+# 语料统计：schema 合法性、长度分位数、语种混合、重复率、单文档重复度、preference 长度偏置
 python3 -m datatools.stats datasets/raw.jsonl --tokenizer ./spongebob_tokenizer --json stats.json
 
-# 去重：精确 + MinHash 近重复，可选对评测集做污染检查
-python3 -m datatools.dedup datasets/raw.jsonl --out datasets/clean.jsonl \
-  --threshold 0.8 --against datasets/eval.jsonl --report dedup.json
+# 去重：精确 + MinHash 近重复
+python3 -m datatools.dedup datasets/raw.jsonl --out datasets/clean.jsonl --threshold 0.8
+
+# 去污染：13-gram 重叠 + 可选 LCS 比例（SmolLM2 的做法）
+python3 -m datatools.decontaminate datasets/train.jsonl --out datasets/clean.jsonl \
+  --against datasets/gsm8k.jsonl datasets/math.jsonl --n 13 --lcs_threshold 0.6
+
+# 确定性划分（按内容哈希，重跑一致、语料增长时已有划分不变）
+python3 -m datatools.split datasets/clean.jsonl --out_prefix datasets/v1
 
 # tokenizer 压缩率：算语料的 token 量，以及比较多个候选词表
 python3 -m datatools.tokenizer_stats --probe datasets/zh.jsonl
 python3 -m datatools.tokenizer_stats datasets/zh.jsonl --tokenizer ./tok_16k ./tok_32k
 ```
 
-`stats` 会报几个直接决定能不能训的东西：
+### 各模块的要点
+
+`stats` 报几个直接决定能不能训的东西：
 
 - **malformed 行**按行号报出来并跳过，大 dump 里的一行坏数据不该让整个任务挂掉
 - **repetition_ratio**（单文档内重复的字符 n-gram 占比）能抓出 boilerplate 循环和退化爬虫结果
 - **preference 的长度偏置**：`chosen` 如果系统性更长，DPO 会顺带学到「越长越好」，
   超过 70% 时会直接告警。这件事一旦开训就看不见了
+
+`filters` 的每条规则返回的是**拒绝原因的名字**而不是布尔值。过滤这一步真正有用的输出不是留下的
+集合，而是**哪条规则删了多少**——一个阈值静默删掉八成语料是 bug，只有归因才看得见。
+阈值故意没有调优：先用 `stats` 看真实分位数，再写进 spec。
 
 `dedup` 的 MinHash 是直接在 numpy 上实现的（不依赖 `datasketch`）：
 
@@ -86,9 +129,27 @@ python3 -m datatools.tokenizer_stats datasets/zh.jsonl --tokenizer ./tok_16k ./t
 - 置换系数做了上界约束，`a*h + b < 2^63`，uint64 不会回绕——这是一个诚实的 universal hash
   族，而不是依赖溢出行为
 - LSH 只负责挑候选，**每个候选都会用完整签名复核**，所以分带只影响召回和速度，
-  不会引入低于阈值的误判。`--bands` / `--rows` 可以手动调这个权衡，报告里会打印实际的
-  S 曲线中点
-- 污染检查匹配的是 **prompt** 而不是整条记录：同一道题配不同答案仍然是泄漏
+  不会引入低于阈值的误判。`--bands` / `--rows` 可以手动调这个权衡
+- **内存上界**：每条存活文档一个签名（128 个置换约 1KB），大约能撑 100–200 万条文档。
+  十亿 token 级别的语料要按源分文件跑，这也是 `prepare` 内联只做流式精确去重的原因
+
+`decontaminate` 是真正的污染检查（`dedup --against` 只做精确 prompt 匹配）：
+
+- 沿用 SmolLM2 的做法：**13-gram 重叠 + 可选 LCS 重叠比例 0.6**。后者用来把巧合撞上的
+  13-gram 判回干净
+- **CJK 需要自己的切分**：按空格切词的 13-gram 在中文里不存在。`text_units` 把每个汉字当
+  一个单元、拉丁/数字连续段当一个词，于是 13-gram 在英文是 13 个词、在中文是 13 个字，
+  两者都约等于一个句子片段
+- 评测项**逐字段单独建索引**，而不是拼成一条。拼接会插入 `=>`、role 前缀这种自然文本里
+  不存在的分隔符，反而让只引用了题干的网页漏过去
+- 短于 13 个单元的评测项按**自身长度**建索引——否则一道 10 个词的题永远匹配不上只会产生
+  13 单元窗口的长网页
+- **已知限制**：极短答案（如 `42`，少于 5 个单元）只能靠精确相等匹配。把任何出现 `42`
+  的文档都判为污染会把语料删空，所以保护主要来自题干。这条在测试里被显式断言，
+  是已知性质而不是意外
+
+`split` 按**内容哈希**划分而不是按位置或打乱的下标，换来两个对消融很重要的性质：重跑结果一致，
+以及语料增长时已有文档不会被重新洗牌（验证曲线跨数据版本仍可比）。`holdout` 是任何阶段都不训的那份。
 
 `tokenizer_stats` 解决两个问题：**语料到底有多少 token**（配比是按 token 算的，而语料是按文档/
 字节发布的），以及**这个词表配不配这份数据**。现有 6400 词表实测：

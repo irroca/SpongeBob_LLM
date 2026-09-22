@@ -95,6 +95,29 @@ def record_text(record: dict) -> str:
     return json.dumps(record, ensure_ascii=False, sort_keys=True)
 
 
+def record_parts(record: dict) -> list[str]:
+    """The individually meaningful text pieces of a record.
+
+    Used for decontamination, where :func:`record_text`'s joined form is wrong:
+    a page containing only the benchmark *question* is still contamination, but
+    the joined form inserts separators (``" => "``, role prefixes) that never
+    appear in natural text and would block the n-gram match.
+    """
+    schema = detect_schema(record)
+    if schema == PRETRAIN:
+        return [str(record.get("text", ""))]
+    if schema == SFT:
+        turns = record.get("conversations") or []
+        return [
+            str(t.get("content", "")) for t in turns if isinstance(t, dict) and t.get("content")
+        ]
+    if schema == PREFERENCE:
+        return [str(record.get(k, "")) for k in ("prompt", "chosen", "rejected")]
+    if schema == TASK:
+        return [str(record.get("question", "")), str(record.get("answer", ""))]
+    return [record_text(record)]
+
+
 def prompt_text(record: dict) -> str:
     """The input side of a record, for contamination checks against eval sets.
 
