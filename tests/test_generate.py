@@ -1,15 +1,15 @@
 import torch
 import pytest
 
-from Config import LLMConfig
-from model import SpongeBob
+from config import LLMConfig
+from model import Whetstone
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
 
 def _tiny_model(**kwargs):
     defaults = dict(dim=64, n_layers=2, n_heads=4, n_kv_heads=2, max_seq_len=64, vocab_size=10, dropout=0.0)
     defaults.update(kwargs)
-    return SpongeBob(LLMConfig(**defaults))
+    return Whetstone(LLMConfig(**defaults))
 
 
 def _patch_forward(model, eos_token_id, other_token_id, vocab_size, n_layers, row0_eos=True, row1_eos=False):

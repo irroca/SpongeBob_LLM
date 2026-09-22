@@ -5,7 +5,7 @@ import torch
 import numpy as np
 from tqdm import tqdm
 from transformers import AutoTokenizer
-from model import SpongeBob
+from model import Whetstone
 from train_utils import add_model_args, describe_model, load_weights, resolve_model_config
 
 def json_converter(obj):
@@ -189,7 +189,7 @@ def main():
     
     # 架构取自被评估的 checkpoint，避免用默认配置加载出半随机初始化的模型
     config = resolve_model_config(args, tokenizer.vocab_size, checkpoint_path=args.model_path)
-    model = SpongeBob(config)
+    model = Whetstone(config)
     load_weights(args.model_path, model, args.device, strict=False)
     
     model = model.to(args.device)

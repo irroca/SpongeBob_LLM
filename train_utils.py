@@ -16,7 +16,7 @@ import numpy as np
 import torch
 from torch import nn, optim
 
-from Config import LLMConfig
+from config import LLMConfig
 
 
 def str2bool(v: Any) -> bool:
@@ -231,7 +231,7 @@ def model_arch_defaults() -> dict:
     }
 
 
-DEFAULT_TOKENIZER_PATH = "./spongebob_tokenizer"
+DEFAULT_TOKENIZER_PATH = "./tokenizer/zh_6400"
 
 
 def add_model_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
@@ -433,7 +433,7 @@ def add_common_train_args(
     data_path: str = "datasets/pretrain.jsonl",
     resume_from: Optional[str] = None,
     seed: int = 1337,
-    wandb_project: str = "SpongeBob",
+    wandb_project: str = "Whetstone",
     skip: Sequence[str] = (),
 ) -> argparse.ArgumentParser:
     """Add the CLI flags shared by every training entry point (pretrain/SFT/distill/dpo/grpo).

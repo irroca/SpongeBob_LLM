@@ -122,8 +122,8 @@ def test_read_jsonl_respects_max_records(tmp_path):
 
 def test_write_jsonl_roundtrips_unicode(tmp_path):
     path = tmp_path / "out.jsonl"
-    rows = [{"text": "海绵宝宝"}, {"text": "hello"}]
+    rows = [{"text": "磨刀石"}, {"text": "hello"}]
 
     assert write_jsonl(str(path), rows) == 2
     assert [r.data for r in read_jsonl(str(path))] == rows
-    assert "海绵宝宝" in path.read_text("utf-8")  # not \u-escaped
+    assert "磨刀石" in path.read_text("utf-8")  # not \u-escaped

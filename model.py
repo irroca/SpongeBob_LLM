@@ -3,7 +3,7 @@ import struct
 import inspect
 import time
 
-from Config import LLMConfig
+from config import LLMConfig
 from typing import Any, Optional, Tuple, List
 import numpy as np
 import torch
@@ -173,8 +173,8 @@ class FeedForward(nn.Module):
         # 使用SiLU激活函数，并结合w1、w3进行非线性变换后经过w2，还加上dropout
         return self.dropout(self.w2(F.silu(self.w1(x)) * self.w3(x)))
      
-# Transformer层：包含注意力和前馈网络（这里称为SpongeBobBlock）
-class SpongeBobBlock(nn.Module):
+# Transformer层：包含注意力和前馈网络（这里称为WhetstoneBlock）
+class WhetstoneBlock(nn.Module):
      def __init__(self, layer_id: int, config: LLMConfig):
           super().__init__()
           self.n_heads = config.n_heads
@@ -205,7 +205,7 @@ class SpongeBobBlock(nn.Module):
           return out, past_kv
 
 # 主模型类，继承自PreTrainedModel
-class SpongeBob(PreTrainedModel):
+class Whetstone(PreTrainedModel):
      config_class = LLMConfig
 
      def __init__(self, params: LLMConfig = None):
@@ -217,7 +217,7 @@ class SpongeBob(PreTrainedModel):
           self.tok_embeddings = nn.Embedding(self.vocab_size, params.dim)
           self.dropout = nn.Dropout(params.dropout)
           # 多层Transformer结构
-          self.layers = nn.ModuleList([SpongeBobBlock(l, params) for l in range(self.n_layers)])
+          self.layers = nn.ModuleList([WhetstoneBlock(l, params) for l in range(self.n_layers)])
           self.norm = RMSNorm(params.dim, eps=params.norm_eps)
           # 输出线性层
           self.output = nn.Linear(params.dim, params.vocab_size, bias=False)

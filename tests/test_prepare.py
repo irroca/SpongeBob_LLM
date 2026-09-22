@@ -20,7 +20,7 @@ from datatools.split import HOLDOUT, TRAIN, VAL
 
 @pytest.fixture(scope="module")
 def tokenizer():
-    return AutoTokenizer.from_pretrained("./spongebob_tokenizer")
+    return AutoTokenizer.from_pretrained("./tokenizer/zh_6400")
 
 
 _SENTENCES = [
@@ -45,7 +45,7 @@ def _corpus(tmp_path, name, n, prefix="文档"):
 def _spec(tmp_path, sources, **kwargs):
     payload = {
         "name": "test",
-        "tokenizer": "./spongebob_tokenizer",
+        "tokenizer": "./tokenizer/zh_6400",
         "total_tokens": 10000,
         "sources": sources,
         **kwargs,
@@ -120,7 +120,7 @@ def test_to_record_passes_known_schemas_through():
 
 
 def test_count_tokens_matches_the_tokenizer(tokenizer):
-    texts = ["海绵宝宝", "hello world"]
+    texts = ["磨刀石", "hello world"]
     assert count_tokens(tokenizer, texts) == [
         len(tokenizer(t, add_special_tokens=False).input_ids) for t in texts
     ]

@@ -12,7 +12,7 @@ stage-specific checks that matter for this repo:
 ::
 
     python3 -m datatools.stats datasets/pretrain.jsonl
-    python3 -m datatools.stats datasets/*.jsonl --tokenizer ./spongebob_tokenizer --json report.json
+    python3 -m datatools.stats datasets/*.jsonl --tokenizer ./tokenizer/zh_6400 --json report.json
 """
 
 from __future__ import annotations

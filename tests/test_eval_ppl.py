@@ -4,7 +4,7 @@ from eval_ppl import wrap_pretrain_text
 
 
 def test_wrap_pretrain_text_adds_bos_and_eos_strings():
-    tokenizer = AutoTokenizer.from_pretrained("./spongebob_tokenizer")
+    tokenizer = AutoTokenizer.from_pretrained("./tokenizer/zh_6400")
     text = "hello world"
 
     wrapped = wrap_pretrain_text(text, tokenizer)
@@ -15,7 +15,7 @@ def test_wrap_pretrain_text_adds_bos_and_eos_strings():
 
 
 def test_wrap_pretrain_text_token_ids_differ_from_raw():
-    tokenizer = AutoTokenizer.from_pretrained("./spongebob_tokenizer")
+    tokenizer = AutoTokenizer.from_pretrained("./tokenizer/zh_6400")
     text = "hello world"
 
     raw_ids = tokenizer(text).input_ids

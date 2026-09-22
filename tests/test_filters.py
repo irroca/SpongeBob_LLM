@@ -16,8 +16,8 @@ from datatools.filters import (
 
 
 def test_script_ratios():
-    assert cjk_ratio("海绵abc") == pytest.approx(2 / 5)
-    assert latin_ratio("海绵abc") == pytest.approx(3 / 5)
+    assert cjk_ratio("磨刀abc") == pytest.approx(2 / 5)
+    assert latin_ratio("磨刀abc") == pytest.approx(3 / 5)
     assert digit_ratio("a1b2") == pytest.approx(0.5)
     assert symbol_ratio("ab!!") == pytest.approx(0.5)
 
@@ -42,7 +42,7 @@ def test_duplicate_line_ratio_catches_boilerplate_blocks():
 
 def test_mean_word_length():
     assert mean_word_length("aa bbb cccc") == pytest.approx(3.0)
-    assert mean_word_length("海绵宝宝") == 0.0
+    assert mean_word_length("磨刀石") == 0.0
 
 
 def test_passing_text_has_no_reason():
@@ -56,7 +56,7 @@ def test_passing_text_has_no_reason():
         ("hi", FilterConfig(min_chars=10), "too_short"),
         ("x" * 100, FilterConfig(max_chars=10), "too_long"),
         ("hello world", FilterConfig(min_cjk_ratio=0.5), "low_cjk_ratio"),
-        ("海绵宝宝", FilterConfig(min_latin_ratio=0.5), "low_latin_ratio"),
+        ("磨刀石", FilterConfig(min_latin_ratio=0.5), "low_latin_ratio"),
         ("1234567890", FilterConfig(max_digit_ratio=0.5), "high_digit_ratio"),
         ("!!!!!!!!!!", FilterConfig(max_symbol_ratio=0.5), "high_symbol_ratio"),
         ("abcdefghij" * 20, FilterConfig(max_repetition=0.5), "repetitive"),
@@ -79,7 +79,7 @@ def test_length_is_checked_before_per_character_scans():
 def test_word_length_rules_skip_text_without_latin_words():
     """Chinese has no latin word runs; a word-length rule must not reject it."""
     config = FilterConfig(min_mean_word_length=3.0, max_mean_word_length=10.0)
-    assert reject_reason("海绵宝宝住在比奇堡的菠萝里。", config) is None
+    assert reject_reason("磨刀石用来打磨刀刃，讲究角度和力度。", config) is None
 
 
 def test_none_thresholds_disable_rules():

@@ -37,7 +37,7 @@ def test_assistant_loss_mask_truncated_without_eos_marks_last_non_pad_only():
 
 
 def test_sft_loss_mask_includes_first_assistant_token():
-    tokenizer = AutoTokenizer.from_pretrained("./spongebob_tokenizer")
+    tokenizer = AutoTokenizer.from_pretrained("./tokenizer/zh_6400")
     ds = SFTDataset("tests/fixtures/sft_tiny.jsonl", tokenizer, max_length=256)
     X, Y, loss_mask = ds[0]
     assert loss_mask.sum() > 0
@@ -78,7 +78,7 @@ def _assert_prompt_masked_and_response_starts(ds, prompt, answer, mask):
 
 
 def test_preference_dataset_masks_responses():
-    tokenizer = AutoTokenizer.from_pretrained("./spongebob_tokenizer")
+    tokenizer = AutoTokenizer.from_pretrained("./tokenizer/zh_6400")
     ds = PreferenceDataset("tests/fixtures/preference_tiny.jsonl", tokenizer, max_length=256)
     cX, cY, cM, rX, rY, rM = ds[0]
     assert cX.shape == cY.shape == cM.shape

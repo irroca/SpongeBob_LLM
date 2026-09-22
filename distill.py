@@ -12,7 +12,7 @@ from transformers import AutoTokenizer
 
 from dataset import SFTDataset
 from losses import kd_loss, masked_cross_entropy
-from model import SpongeBob
+from model import Whetstone
 from train_utils import (
     MODEL_ARCH_FIELDS,
     add_common_train_args,
@@ -117,7 +117,7 @@ def main():
         parser,
         batch_size=4,
         learning_rate=1e-4,
-        wandb_project="SpongeBob-Distill",
+        wandb_project="Whetstone-Distill",
         log_step=1,
         max_seq_len=256,
         data_path="tests/fixtures/sft_tiny.jsonl",
@@ -146,8 +146,8 @@ def main():
         args, tokenizer.vocab_size, checkpoint_path=args.resume_from or args.student_path
     )
 
-    teacher = SpongeBob(teacher_cfg).to(args.device)
-    student = SpongeBob(args.lm_config).to(args.device)
+    teacher = Whetstone(teacher_cfg).to(args.device)
+    student = Whetstone(args.lm_config).to(args.device)
     print(describe_model(teacher, teacher_cfg, "teacher"))
     print(describe_model(student, args.lm_config, "student"))
 

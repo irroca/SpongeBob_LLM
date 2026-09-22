@@ -50,7 +50,7 @@ def test_permutation_arithmetic_never_overflows_uint64():
 
 def test_identical_documents_get_identical_signatures():
     hasher = MinHasher(num_perm=64, seed=0)
-    text = "海绵宝宝住在比奇堡的一个菠萝里面，他喜欢抓水母。"
+    text = "磨刀石把刀刃磨得更锋利，讲究角度和力度。"
     assert np.array_equal(hasher.signature(text), hasher.signature(text))
 
 
@@ -77,7 +77,7 @@ def test_signature_estimates_true_jaccard():
 
 def test_unrelated_documents_have_near_zero_similarity():
     hasher = MinHasher(num_perm=256, seed=0)
-    a = "蟹堡王的秘方汉堡是比奇堡最受欢迎的食物。"
+    a = "磨刀石的粗细分级决定了打磨的先后顺序。"
     b = "Gradient descent converges when the learning rate is small enough."
     assert estimate_jaccard(hasher.signature(a), hasher.signature(b)) < 0.05
 
@@ -144,11 +144,11 @@ def test_union_find_merges_transitively_and_roots_at_lowest_index():
 
 
 def test_cluster_near_duplicates_groups_only_similar_documents():
-    base = "海绵宝宝住在比奇堡的一个菠萝里面，他每天都去蟹堡王上班，最喜欢的事情是抓水母。"
+    base = "磨刀石的作用是把刀刃磨得更锋利，这道工艺看似简单，实际上非常讲究角度和力度。"
     texts = [
         base,
         base,                                    # exact repeat
-        base.replace("抓水母", "吹泡泡"),          # small edit -> near duplicate
+        base.replace("角度和力度", "耐心和经验"),          # small edit -> near duplicate
         "深度学习模型的训练需要大量高质量的语料数据，数据质量往往比模型结构更重要。",  # unrelated
     ]
     signatures = MinHasher(num_perm=256, ngram=5, seed=0).signatures(texts)
@@ -159,8 +159,8 @@ def test_cluster_near_duplicates_groups_only_similar_documents():
 
 
 def test_cluster_respects_the_threshold():
-    base = "海绵宝宝住在比奇堡的一个菠萝里面，他每天都去蟹堡王上班，最喜欢的事情是抓水母。"
-    texts = [base, base.replace("抓水母", "吹泡泡")]
+    base = "磨刀石的作用是把刀刃磨得更锋利，这道工艺看似简单，实际上非常讲究角度和力度。"
+    texts = [base, base.replace("角度和力度", "耐心和经验")]
     signatures = MinHasher(num_perm=256, ngram=5, seed=0).signatures(texts)
 
     assert cluster_near_duplicates(signatures, threshold=0.7) == [[0, 1]]

@@ -12,7 +12,7 @@ from transformers import AutoTokenizer
 
 from dataset import PreferenceDataset
 from losses import dpo_loss, sequence_logprobs
-from model import SpongeBob
+from model import Whetstone
 from train_utils import (
     add_common_train_args,
     add_model_args,
@@ -106,7 +106,7 @@ def main():
         parser,
         batch_size=2,
         learning_rate=1e-5,
-        wandb_project="SpongeBob-DPO",
+        wandb_project="Whetstone-DPO",
         log_step=1,
         max_seq_len=256,
         data_path="tests/fixtures/preference_tiny.jsonl",
@@ -128,8 +128,8 @@ def main():
     )
     args.lm_config = cfg
 
-    policy = SpongeBob(cfg).to(args.device)
-    ref = SpongeBob(cfg).to(args.device)
+    policy = Whetstone(cfg).to(args.device)
+    ref = Whetstone(cfg).to(args.device)
     print(describe_model(policy, cfg, "policy"))
     load_weights(args.policy_path, policy, args.device, strict=False)
     load_weights(args.ref_path, ref, args.device, strict=False)

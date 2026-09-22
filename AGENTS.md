@@ -2,11 +2,15 @@
 
 ## Cursor Cloud specific instructions
 
-SpongeBob LLM is a from-scratch PyTorch LLM training/inference codebase (no web server, no
-long-running service). The core workflow is a set of CLI scripts:
+Whetstone is a from-scratch PyTorch LLM training/inference codebase (no web server, no
+long-running service) targeting bilingual zh/en **verifiable tasks** (arithmetic, code). The core
+workflow is a set of CLI scripts:
 
-- `train_tokenizer.py` — train the BPE tokenizer (reads a hardcoded `pretrain.jsonl` in repo root).
-- `pretrain.py` → `SFT.py` → `distill.py` → `dpo.py` → `grpo.py` — the five-stage training pipeline
+- `python3 -m datatools.fetch_evals` → `python3 -m datatools.prepare <spec>` → `train_tokenizer.py`
+ — the data pipeline, which runs *before* any training. See `docs/corpus-plan.md`.
+- `train_tokenizer.py --data <prepared jsonl> --out <dir> --vocab_size N` — train a BPE tokenizer
+ on prepared corpus files. It no longer reads a hardcoded path.
+- `pretrain.py` → `sft.py` → `distill.py` → `dpo.py` → `grpo.py` — the five-stage training pipeline
  (Pretrain → SFT → real Knowledge Distillation → DPO → GRPO/RLVR). `distill.py` does real KD (frozen
  teacher, CE + temperature-scaled KL on assistant tokens via `losses.kd_loss`), not the old fake
  special-token-weighted version. `dpo.py` runs standard Bradley-Terry DPO with a frozen reference
@@ -36,21 +40,22 @@ rather than duplicating commands here.
   `torch.cuda.is_available()` else `cpu`, so on this VM it auto-selects `cpu`. You can pass
   `--device cpu` explicitly. `torch` is installed as the CPU wheel; a harmless
   `GradScaler ... CUDA is not available. Disabling.` warning is expected on CPU.
-- **No datasets or checkpoints are committed.** Training scripts expect JSONL data under
-  `datasets/` (e.g. `datasets/pretrain.jsonl` with `{"text": ...}` lines, `datasets/sft_512.jsonl`
-  with `{"conversations": [...]}` lines) and there are no pretrained `.pth` weights in the repo.
-  To exercise the pipeline you must create small synthetic JSONL data first. `datasets/`,
-  `results/`, and `*.pth` are git-ignored so demo artifacts are not committed.
-- **Tokenizer is committed** in `spongebob_tokenizer/` (vocab size 6400, bos `<s>`, eos `</s>`,
-  pad `<unk>`). You do NOT need to run `train_tokenizer.py` to run training/inference — but note
-  that script reads `pretrain.jsonl` from the repo root (not `datasets/`).
+- **No datasets or checkpoints are committed.** Training scripts expect JSONL under `datasets/`,
+  which is git-ignored along with `results*/` and `*.pth`. Build real data with
+  `datatools.prepare`, or generate synthetic task data with `envs.generate_data`; the committed
+  `tests/fixtures/*.jsonl` are enough for a CPU smoke of every stage.
+- **`tokenizer/zh_6400/` is a legacy tokenizer**, committed so the CPU tests and smoke runs work
+  (vocab 6400, bos `<s>`, eos `</s>`, pad `<unk>`). It was trained on Chinese only and compresses
+  code at 2.23 chars/token against 4.00 for English prose, so real bilingual+code training needs a
+  retrained ~32k vocabulary (`train_tokenizer.py`). **Checkpoints do not survive a tokenizer
+  change** — `resolve_model_config` raises on a `vocab_size` mismatch, which is intended.
 - **`chat.py` is an interactive REPL** (`input()`), so pipe input for non-interactive runs, e.g.
  `printf 'question\nquit\n' | python3 chat.py --save_dir results --model_mode 1 --device cpu`.
  `--model_mode` selects the checkpoint: 0=`pretrain*.pth`, 1=`sft*.pth`, 2=`distill*.pth`,
  3=`dpo*.pth`, 4=`grpo*.pth`, and it falls back to `*_final.pth` filenames. `--save_dir` already
  defaults to `results`, matching the other stages' `--save_dir results`.
 - **`--use_wandb True` requires `swanlab`** (imported lazily, not installed by default). Leave
- wandb off unless you install it. All five training scripts (`pretrain.py`/`SFT.py`/`distill.py`/
+ wandb off unless you install it. All five training scripts (`pretrain.py`/`sft.py`/`distill.py`/
  `dpo.py`/`grpo.py`) support `--use_wandb`/`--wandb_project` via `train_utils.init_wandb_if_needed`.
  `grpo.py` additionally appends every step's metrics to `{save_dir}/grpo_metrics.jsonl`, so RL
  curves can be plotted with no tracker installed.
@@ -97,6 +102,12 @@ rather than duplicating commands here.
   - `prepare`'s report is meant to be trustworthy: `fill < 100%` plus `ran out of data` means a
     source was silently down-weighted, and `kept%` excludes records pulled into the tokenization
     batch but never emitted. Don't regress either.
+  - `datatools/fetch_evals.py` pulls benchmarks into the repo's `{"question","answer"}` schema, so
+    one file serves both `prepare`'s `decontaminate.against` and `grpo.py --eval_path`. Converters
+    are pure functions tested offline against recorded rows — update the recorded row when a
+    field name changes upstream rather than loosening the converter. **A mixture spec with an
+    empty `decontaminate.against` silently checks nothing**, so run `fetch_evals
+    --decontamination_only --update_spec <spec>` before `prepare`.
 - **Common training CLI flags come from `train_utils.add_common_train_args(parser, **overrides)`**
  (`--save_dir`, `--epochs`, `--batch_size`, `--learning_rate`, `--device`, `--use_wandb`,
  `--wandb_project`, `--dtype`, `--num_workers`, `--accumulation_steps`, `--grad_clip`, `--log_step`,

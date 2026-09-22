@@ -147,7 +147,7 @@ def main() -> None:
     parser.add_argument(
         "--tokenizer",
         nargs="+",
-        default=["./spongebob_tokenizer"],
+        default=["./tokenizer/zh_6400"],
         help="One or more tokenizers to compare",
     )
     parser.add_argument("--probe", action="store_true", help="Also measure the built-in domain probes")

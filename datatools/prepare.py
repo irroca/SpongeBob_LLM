@@ -83,7 +83,7 @@ class MixtureSpec:
     name: str
     total_tokens: int
     sources: list[SourceSpec]
-    tokenizer: str = "./spongebob_tokenizer"
+    tokenizer: str = "./tokenizer/zh_6400"
     seed: int = 0
     val_fraction: float = 0.005
     holdout_fraction: float = 0.005

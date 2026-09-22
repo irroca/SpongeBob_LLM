@@ -1,8 +1,6 @@
-{"text": "海绵宝宝在比奇堡抓水母，非常开心。"}
-{"text": "派大星喜欢和海绵宝宝一起吹泡泡。"}
-{"text": "蟹老板在蟹堡王数钱，章鱼哥在旁边抱怨。"}
-{"text": "珊迪来自德州，她住在水下的圆顶屋里。"}
-{"text": "海绵宝宝每天早上去蟹堡王上班做蟹黄堡。"}
-{"text": "比奇堡的居民们都认识那只可爱的海绵。"}
-{"text": "水母田里漂着许多粉色的水母。"}
-{"text": "派大星住在一块石头下面。"}
+{"text": "磨刀石的作用是把刀刃磨得更锋利，这道工艺看似简单，实际上非常讲究角度和力度。"}
+{"text": "预训练语料的质量往往比模型结构更重要，尤其是在参数量受限的小模型上。"}
+{"text": "The quality of a pretraining corpus matters more than the architecture, especially for a small model trained on a limited token budget."}
+{"text": "Reinforcement learning with verifiable rewards replaces a learned reward model with a programmatic checker, so the training signal is a rule rather than a guess."}
+{"text": "def add(a: int, b: int) -> int:\n    \"\"\"Return the sum of two integers.\"\"\"\n    return a + b\n"}
+{"text": "Let f(x) = 3x^2 + 5x - 2. Then f'(x) = 6x + 5, so f'(2) = 17."}

@@ -37,7 +37,7 @@ from losses import (
     token_logprobs,
     zero_variance_groups,
 )
-from model import SpongeBob
+from model import Whetstone
 from rollout import (
     build_prompt_ids,
     collate_rollouts,
@@ -204,7 +204,7 @@ def main():
         save_step=50,
         max_seq_len=512,
         data_path="",
-        wandb_project="SpongeBob-GRPO",
+        wandb_project="Whetstone-GRPO",
         skip=("epochs", "accumulation_steps", "num_workers"),
     )
     add_model_args(parser)
@@ -247,13 +247,13 @@ def main():
         args, tokenizer.vocab_size, checkpoint_path=args.resume_from or args.policy_path
     )
 
-    policy = SpongeBob(args.lm_config).to(args.device)
+    policy = Whetstone(args.lm_config).to(args.device)
     print(describe_model(policy, args.lm_config, "policy"))
     load_weights(args.policy_path, policy, args.device, strict=False)
 
     ref = None
     if args.kl_coeff > 0:
-        ref = SpongeBob(args.lm_config).to(args.device)
+        ref = Whetstone(args.lm_config).to(args.device)
         load_weights(args.ref_path or args.policy_path, ref, args.device, strict=False)
         ref.eval()
         for p in ref.parameters():

@@ -7,7 +7,7 @@ import warnings
 import os
 import sys
 from transformers import AutoTokenizer
-from model import SpongeBob
+from model import Whetstone
 from train_utils import add_model_args, describe_model, load_weights, resolve_model_config
 
 # 彩色输出工具类
@@ -75,7 +75,7 @@ def init_model(args):
         # 架构取自 checkpoint 自身，否则换了模型尺寸就会静默加载出半随机初始化的模型
         model_config = resolve_model_config(args, tokenizer.vocab_size, checkpoint_path=ckp_path)
         
-        model = SpongeBob(model_config)
+        model = Whetstone(model_config)
         load_weights(ckp_path, model, args.device, strict=False)
         model = model.eval().to(args.device)
         
@@ -145,7 +145,7 @@ def streaming_generation(model, tokenizer, prompt, args):
         return ""
 
 def main():
-    parser = argparse.ArgumentParser(description="SpongeBob模型交互式对话")
+    parser = argparse.ArgumentParser(description="Whetstone模型交互式对话")
     
     # 模型参数
     parser.add_argument('--save_dir', default='results', type=str, 
@@ -177,7 +177,7 @@ def main():
     args = parser.parse_args()
     
     # 打印配置信息
-    print(colored_text("=== SpongeBob模型对话系统 ===", Colors.BOLD + Colors.CYAN))
+    print(colored_text("=== Whetstone模型对话系统 ===", Colors.BOLD + Colors.CYAN))
     print(colored_text(f"设备: {args.device}", Colors.YELLOW))
     print(colored_text(f"模型模式: {['预训练', 'SFT聊天', '蒸馏', 'DPO', 'GRPO'][args.model_mode]}", Colors.YELLOW))
     print(colored_text("输入 'quit' 或 'exit' 退出对话", Colors.YELLOW))
@@ -198,7 +198,7 @@ def main():
             
             # 退出条件
             if user_input.lower() in ['quit', 'exit', '退出']:
-                print(colored_text("感谢使用SpongeBot对话系统！", Colors.CYAN))
+                print(colored_text("感谢使用Whetstone对话系统！", Colors.CYAN))
                 break
             if not user_input:
                 continue

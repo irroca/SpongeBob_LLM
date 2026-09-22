@@ -11,7 +11,7 @@ from datatools.dedup import (
 )
 from datatools.records import write_jsonl
 
-BASE = "海绵宝宝住在比奇堡的一个菠萝里面，他每天都去蟹堡王上班，最喜欢的事情是抓水母。"
+BASE = "磨刀石的作用是把刀刃磨得更锋利，这道工艺看似简单，实际上非常讲究角度和力度。"
 OTHER = "深度学习模型的训练需要大量高质量的语料数据，数据质量往往比模型结构更重要。"
 
 
@@ -33,7 +33,7 @@ def test_dedup_removes_exact_then_near_duplicates():
     records = [
         {"text": BASE},
         {"text": BASE},                               # exact
-        {"text": BASE.replace("抓水母", "吹泡泡")},     # near
+        {"text": BASE.replace("角度和力度", "耐心和经验")},     # near
         {"text": OTHER},
     ]
 
@@ -47,7 +47,7 @@ def test_dedup_removes_exact_then_near_duplicates():
 
 
 def test_dedup_preserves_input_order_and_keeps_the_earliest_member():
-    records = [{"text": OTHER}, {"text": BASE}, {"text": BASE.replace("抓水母", "吹泡泡")}]
+    records = [{"text": OTHER}, {"text": BASE}, {"text": BASE.replace("角度和力度", "耐心和经验")}]
 
     kept, _ = dedup_records(records, threshold=0.7, num_perm=256, seed=0)
 
@@ -55,7 +55,7 @@ def test_dedup_preserves_input_order_and_keeps_the_earliest_member():
 
 
 def test_exact_only_mode_leaves_near_duplicates_alone():
-    records = [{"text": BASE}, {"text": BASE.replace("抓水母", "吹泡泡")}]
+    records = [{"text": BASE}, {"text": BASE.replace("角度和力度", "耐心和经验")}]
 
     kept, report = dedup_records(records, near=False)
 
@@ -148,7 +148,7 @@ def test_report_serializes_to_json():
 def test_explicit_banding_trades_recall_for_speed():
     """LSH banding only affects which pairs get *checked*; every candidate is still
     verified against the full signature, so more bands can only raise recall."""
-    records = [{"text": BASE}, {"text": BASE.replace("抓水母", "吹泡泡")}]
+    records = [{"text": BASE}, {"text": BASE.replace("角度和力度", "耐心和经验")}]
 
     coarse, coarse_report = dedup_records(
         records, threshold=0.5, num_perm=64, bands=1, rows=64, seed=0

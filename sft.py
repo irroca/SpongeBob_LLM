@@ -12,7 +12,7 @@ from transformers import AutoTokenizer
 
 from dataset import SFTDataset
 from losses import masked_cross_entropy
-from model import SpongeBob
+from model import Whetstone
 from train_utils import (
     add_common_train_args,
     add_model_args,
@@ -85,7 +85,7 @@ def main():
     add_common_train_args(
         parser,
         learning_rate=1e-4,
-        wandb_project="SpongeBob-SFT",
+        wandb_project="Whetstone-SFT",
         data_path="datasets/sft_512.jsonl",
     )
     add_model_args(parser)
@@ -99,7 +99,7 @@ def main():
     args.lm_config = resolve_model_config(
         args, tokenizer.vocab_size, checkpoint_path=args.resume_from or args.pretrained_path
     )
-    model = SpongeBob(args.lm_config).to(args.device)
+    model = Whetstone(args.lm_config).to(args.device)
 
     if args.pretrained_path and os.path.exists(args.pretrained_path):
         print(f"Loading pretrained weights from {args.pretrained_path}")

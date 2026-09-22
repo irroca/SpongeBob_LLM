@@ -14,7 +14,7 @@ from datatools.tokenizer_stats import (
 
 @pytest.fixture(scope="module")
 def tokenizer():
-    return AutoTokenizer.from_pretrained("./spongebob_tokenizer")
+    return AutoTokenizer.from_pretrained("./tokenizer/zh_6400")
 
 
 def test_fertility_ratios():
@@ -38,7 +38,7 @@ def test_measure_skips_empty_documents(tokenizer):
 
 
 def test_measure_counts_match_the_tokenizer(tokenizer):
-    text = "海绵宝宝喜欢抓水母"
+    text = "磨刀石让刀更锋利"
     stats = measure(tokenizer, [text])
     assert stats.tokens == len(tokenizer(text, add_special_tokens=False).input_ids)
     assert stats.chars == len(text)
@@ -71,7 +71,7 @@ def test_chinese_single_char_fraction_is_high_by_construction(tokenizer):
 def test_measure_corpus_reads_every_schema(tmp_path, tokenizer):
     path = tmp_path / "mixed.jsonl"
     write_jsonl(str(path), [
-        {"text": "海绵宝宝喜欢抓水母"},
+        {"text": "磨刀石让刀更锋利"},
         {"conversations": [
             {"role": "user", "content": "hi"},
             {"role": "assistant", "content": "yo"},
@@ -99,8 +99,8 @@ def test_project_tokens_scales_by_document_count():
 
 def test_render_includes_a_row_per_measurement(tokenizer):
     rows = [
-        ("./spongebob_tokenizer", "probe:zh", measure(tokenizer, [PROBES["zh"]])),
-        ("./spongebob_tokenizer", "probe:code", measure(tokenizer, [PROBES["code"]])),
+        ("./tokenizer/zh_6400", "probe:zh", measure(tokenizer, [PROBES["zh"]])),
+        ("./tokenizer/zh_6400", "probe:code", measure(tokenizer, [PROBES["code"]])),
     ]
     text = render(rows)
     assert "probe:zh" in text and "probe:code" in text

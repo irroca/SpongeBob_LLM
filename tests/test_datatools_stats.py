@@ -33,7 +33,7 @@ def test_percentile_clamps_to_range():
 
 
 def test_char_profile_separates_scripts():
-    profile = char_profile("海绵abc12")
+    profile = char_profile("磨刀abc12")
     assert profile["cjk"] == pytest.approx(2 / 7)
     assert profile["latin"] == pytest.approx(3 / 7)
     assert profile["digit"] == pytest.approx(2 / 7)
@@ -57,12 +57,12 @@ def test_analyze_counts_lines_schemas_and_duplicates(tmp_path):
     path = tmp_path / "data.jsonl"
     path.write_text(
         "\n".join([
-            json.dumps({"text": "海绵宝宝喜欢抓水母"}),
-            json.dumps({"text": "海绵宝宝喜欢抓水母"}),
+            json.dumps({"text": "磨刀石让刀更锋利"}),
+            json.dumps({"text": "磨刀石让刀更锋利"}),
             json.dumps({"text": ""}),
             "{broken",
             "",
-            json.dumps({"text": "章鱼哥在演奏单簧管"}),
+            json.dumps({"text": "砺石可以校准刀口"}),
         ]),
         "utf-8",
     )
@@ -126,8 +126,8 @@ def test_analyze_adds_token_stats_when_a_tokenizer_is_given(tmp_path):
     from transformers import AutoTokenizer
 
     path = tmp_path / "data.jsonl"
-    write_jsonl(str(path), [{"text": "海绵宝宝喜欢抓水母和做蟹黄堡。"}])
-    tokenizer = AutoTokenizer.from_pretrained("./spongebob_tokenizer")
+    write_jsonl(str(path), [{"text": "磨刀石可以把刀刃磨得更加锋利。"}])
+    tokenizer = AutoTokenizer.from_pretrained("./tokenizer/zh_6400")
 
     report = analyze(str(path), tokenizer=tokenizer)
 

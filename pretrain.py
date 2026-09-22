@@ -12,7 +12,7 @@ from transformers import AutoTokenizer
 
 from dataset import PretrainDataset
 from losses import masked_cross_entropy
-from model import SpongeBob
+from model import Whetstone
 from train_utils import (
     add_common_train_args,
     add_model_args,
@@ -85,7 +85,7 @@ def main():
     add_common_train_args(
         parser,
         learning_rate=5e-4,
-        wandb_project="SpongeBob-Pretrain",
+        wandb_project="Whetstone-Pretrain",
         data_path="datasets/pretrain.jsonl",
     )
     add_model_args(parser)
@@ -98,7 +98,7 @@ def main():
     args.lm_config = resolve_model_config(
         args, tokenizer.vocab_size, checkpoint_path=args.resume_from
     )
-    model = SpongeBob(args.lm_config).to(args.device)
+    model = Whetstone(args.lm_config).to(args.device)
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate)
     ctx, scaler = build_autocast_scaler(args.device, args.dtype)
 
