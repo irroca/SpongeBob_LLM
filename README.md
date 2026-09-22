@@ -67,6 +67,10 @@ python3 -m datatools.stats datasets/raw.jsonl --tokenizer ./spongebob_tokenizer 
 # 去重：精确 + MinHash 近重复，可选对评测集做污染检查
 python3 -m datatools.dedup datasets/raw.jsonl --out datasets/clean.jsonl \
   --threshold 0.8 --against datasets/eval.jsonl --report dedup.json
+
+# tokenizer 压缩率：算语料的 token 量，以及比较多个候选词表
+python3 -m datatools.tokenizer_stats --probe datasets/zh.jsonl
+python3 -m datatools.tokenizer_stats datasets/zh.jsonl --tokenizer ./tok_16k ./tok_32k
 ```
 
 `stats` 会报几个直接决定能不能训的东西：
@@ -85,6 +89,22 @@ python3 -m datatools.dedup datasets/raw.jsonl --out datasets/clean.jsonl \
   不会引入低于阈值的误判。`--bands` / `--rows` 可以手动调这个权衡，报告里会打印实际的
   S 曲线中点
 - 污染检查匹配的是 **prompt** 而不是整条记录：同一道题配不同答案仍然是泄漏
+
+`tokenizer_stats` 解决两个问题：**语料到底有多少 token**（配比是按 token 算的，而语料是按文档/
+字节发布的），以及**这个词表配不配这份数据**。现有 6400 词表实测：
+
+| 领域 | 字符/token | 单字符 token 占比 |
+|------|-----------|------------------|
+| 中文 | 1.40 | 63.3% |
+| 英文 | 4.00 | 14.7% |
+| **代码** | **2.23** | 42.5% |
+
+英文和代码都是 ASCII，代码还更重复，正常词表下代码的压缩率不该差于散文，这里却低了 44%
+（`grpo_advantages` → `gr|p|o|_|ad|v|ant|ages`）。**加代码语料必须重训词表。**
+注意 `single_char_frac` 只能在同一书写系统内比较——中文单字本身就是有意义的单位，
+63% 是正常的，不是碎片化。
+
+语料方案（候选清单、许可证坑、配比与消融计划）见 [`docs/corpus-plan.md`](docs/corpus-plan.md)。
 
 ## 快速跑通（CPU smoke）
 
