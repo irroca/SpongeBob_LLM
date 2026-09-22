@@ -114,7 +114,13 @@ def record_parts(record: dict) -> list[str]:
     if schema == PREFERENCE:
         return [str(record.get(k, "")) for k in ("prompt", "chosen", "rejected")]
     if schema == TASK:
-        return [str(record.get("question", "")), str(record.get("answer", ""))]
+        # A worked solution is protected too: a page quoting the solution but
+        # not the question is still contamination.
+        return [
+            str(record.get(key, ""))
+            for key in ("question", "answer", "solution")
+            if record.get(key)
+        ]
     return [record_text(record)]
 
 
