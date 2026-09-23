@@ -1,6 +1,10 @@
 # AGENTS.md
 
-## Cursor Cloud specific instructions
+## Start here
+
+**Read [`docs/status.md`](docs/status.md) first.** It is the handoff document: where the project
+actually stands, which PRs are open, the three engineering items that block real training, and the
+ordered next steps. This file covers how the codebase behaves; `status.md` covers what to do next.
 
 Whetstone is a from-scratch PyTorch LLM training/inference codebase (no web server, no
 long-running service) targeting bilingual zh/en **verifiable tasks** (arithmetic, code). The core
@@ -36,10 +40,17 @@ rather than duplicating commands here.
 
 ### Environment / running caveats (non-obvious)
 
-- **No GPU in Cursor Cloud VMs.** Every script defaults `--device` to `cuda` when
-  `torch.cuda.is_available()` else `cpu`, so on this VM it auto-selects `cpu`. You can pass
-  `--device cpu` explicitly. `torch` is installed as the CPU wheel; a harmless
-  `GradScaler ... CUDA is not available. Disabling.` warning is expected on CPU.
+- **`--device` auto-selects**: `cuda` when `torch.cuda.is_available()` else `cpu`, everywhere
+  (all five training scripts, `eval_ppl.py`, `chat.py`). On a CPU-only box a harmless
+  `GradScaler ... CUDA is not available. Disabling.` warning is expected.
+- **Only `--dtype float16` enables GradScaler.** `bfloat16` needs no loss scaling and will not
+  create one (see `build_autocast_scaler`) — that is intended, not a missing feature. Prefer
+  `bfloat16` on any modern GPU.
+- **Two things will break at real scale and have not been fixed** (details and suggested designs
+  in `docs/status.md` §3): `dataset.py` reads an entire JSONL into a Python list, and
+  `model.py` materializes the full `(B, heads, q_len, kv_len)` attention score matrix instead of
+  using `F.scaled_dot_product_attention`. Both are fine for the CPU tests and for fixtures; both
+  are blocking for a ~100M model on a 30GB corpus.
 - **No datasets or checkpoints are committed.** Training scripts expect JSONL under `datasets/`,
   which is git-ignored along with `results*/` and `*.pth`. Build real data with
   `datatools.prepare`, or generate synthetic task data with `envs.generate_data`; the committed

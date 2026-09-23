@@ -315,11 +315,14 @@ python3 -m datatools.prepare configs/mixture_v1.json --out_dir datasets/prepared
 
 ## 7. 下一步
 
-1. 用清洗后的语料重训 tokenizer（vocab 由消融 #5 定，起点 32k），顺手修掉
-   `train_tokenizer.py` 里硬编码的 `pretrain.jsonl` 路径
-2. 跑消融 #1（中文占比）和 #5（词表大小）——它们决定其余所有配置
-3. 按定下的配比产出正式数据集，租卡做 ~100M / ~10B token 的正式预训练
-4. 重建 SFT / DPO / GRPO 阶段的数据（可验证任务部分见 §1.6）
+完整的执行顺序、验收标准和阻塞项见 [`docs/status.md`](status.md)。概要：
+
+1. 拉评测集闭上去污染的环（`fetch_evals --update_spec`）
+2. `--scale 0.001` 小规模跑通管线，暴露 spec 里的现实问题（HF 字段名、`data_dir` 写法等）
+3. 跑消融 #1（中文占比）和 #5（词表大小）——它们决定其余所有配置
+4. 按定下的配比产出正式数据集，用它重训 tokenizer
+5. 租卡做 ~100M / ~10B token 的正式预训练（前提：`status.md` §3 的三件工程事已完成）
+6. 重建 SFT / DPO / GRPO 阶段的数据（可验证任务部分见 §1.6）
 
 ---
 

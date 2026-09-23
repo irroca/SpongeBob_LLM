@@ -16,6 +16,9 @@ RL 部分不依赖 TRL/veRL：可验证奖励环境、组相对优势、clipped 
 仓库里的 GRPO 实验结果是 29M 玩具规模的**实现验证**，不是能力声明（见
 [`docs/experiments.md`](docs/experiments.md)）。
 
+> 接手开发请先读 [`docs/status.md`](docs/status.md)：项目状态、待办、长期路线，以及
+> **正式训练之前必须先解决的三件工程问题**。
+
 ## 环境
 
 ```bash
