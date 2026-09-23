@@ -183,8 +183,13 @@ python3 -m datatools.stats datasets/smoke/train.jsonl --tokenizer tokenizer/zh_6
 `envs/arithmetic.py` 的评测集）、代码补全执行通过率、**语言混淆率**（中文 prompt 下输出
 英文的比例，双语小模型的典型故障）。
 
-需要新写：一个消融编排脚本（生成各组 spec → 跑训练 → 汇总对比表）。可以照 `analyze_grpo.py`
-的形式做。
+记录和对比这一层已经有了：每次训练自动写 `{save_dir}/runs/{run_id}/`（配置 + git commit +
+数据指纹 + 逐点指标 + 失败原因），`analyze_runs.py compare --metric loss --split val` 直接横向比，
+`analyze_runs.py plot --out report.html` 出自包含的曲线报告。验证集指标走
+`--val_data_path` / `--val_every`。
+
+**还需要新写**：消融编排脚本（按维度生成各组 mixture spec → 依次跑 → 汇总成一张表）。
+`analyze_runs.py` 负责后半段，前半段还没有。
 
 ### 步骤 5：正式数据集 + 重训 tokenizer
 ```bash

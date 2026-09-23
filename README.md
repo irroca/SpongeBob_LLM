@@ -75,11 +75,13 @@ datatools/   envs/   configs/   tests/   docs/   tokenizer/
 | `model.py` / `config.py` | 模型与配置（RoPE、RMSNorm、SwiGLU、可选 GQA、权重共享）|
 | `dataset.py` | Pretrain / SFT / Preference(DPO) 数据集与 assistant loss mask |
 | `losses.py` / `train_utils.py` | CE/KD/DPO/GRPO loss；共享训练工具与 CLI |
+| `runlog.py` / `evaluate.py` | 每次训练的完整记录；held-out 验证指标 |
 | `datatools/` | 语料管线：统计、过滤、去重、去污染、划分、配比编排、评测集拉取 |
 | `envs/` | 可验证奖励环境（RLVR）与各阶段数据生成 |
 | `rollout.py` | GRPO 在线采样：分组 rollout、completion mask、logprob |
 | `pretrain.py` / `sft.py` / `distill.py` / `dpo.py` / `grpo.py` | 五个阶段的训练入口 |
-| `eval_ppl.py` / `chat.py` / `analyze_grpo.py` | 困惑度评估、交互式生成、RL 指标分析 |
+| `eval_ppl.py` / `chat.py` | 困惑度评估、交互式生成 |
+| `analyze_runs.py` / `analyze_grpo.py` | 训练记录复盘（全阶段）、RL 指标分析 |
 | `configs/` | 配比 spec（`mixture_v1.json`）|
 | `docs/corpus-plan.md` | 语料候选清单、许可证、配比与消融计划 |
 | `docs/experiments.md` | 实验协议与已记录的跑批结果 |
@@ -103,6 +105,52 @@ python3 sft.py     --pretrained_path results/pretrain_final.pth --data_path data
 python3 dpo.py     --policy_path results/sft_final.pth --data_path datasets/preference.jsonl
 python3 grpo.py    --policy_path results/dpo_final.pth --env arithmetic
 ```
+
+## 训练记录与复盘
+
+五个阶段都会把每次训练完整记录到 `{save_dir}/runs/{run_id}/`，不依赖任何 tracker 服务：
+
+| 文件 | 内容 |
+|------|------|
+| `meta.json` | 启动时写一次：完整 CLI 参数、解析后的架构与参数量、环境（python/torch/设备/加速器/主机）、**git commit 与工作区是否 dirty**、每个输入文件的指纹、以及数据的 `manifest.json` 摘要 |
+| `metrics.jsonl` | 每个记录点一行，边训边追加。含 `split`（train/val）、step、累计 token、吞吐、耗时 |
+| `summary.json` | 退出时写，**失败也写**：状态、时长、总 token、各指标的最终值与最优值、崩溃时的 traceback |
+
+记录 git commit 和数据指纹不是形式主义——**一条没有记录「哪份数据、哪个 commit」的曲线是没法复盘的**，
+只能看个热闹。消融跑到第六组时，这决定了你还能不能说清每条曲线对应什么。
+
+`metrics.jsonl` 是逐行 flush 的，所以被 kill 的训练也保留到中断那一刻的全部数据点；
+`analyze_runs.py` 能读只有半行的残缺文件。
+
+### 复盘命令
+
+```bash
+python analyze_runs.py list results                      # 每次训练一行
+python analyze_runs.py show results/runs/pretrain_2026...  # 单次训练的全部细节
+python analyze_runs.py compare results_zh00 results_zh30 --metric loss --split val   # 消融对比
+python analyze_runs.py plot results --out report.html    # 自包含 HTML，内嵌 SVG 曲线
+```
+
+`plot` 生成的 HTML 不依赖任何绘图库也不引用任何外部资源，每个指标一张图、多次训练叠在一起，
+浏览器直接打开。
+
+### 验证集指标
+
+训练 loss 单看没用，**跨数据配比更是没法比**——不同配比 tokenize 出的分布不同，loss 本来就不在同一尺度上。
+所以加了 `--val_data_path` / `--val_every` / `--val_batches`：
+
+- pretrain / SFT / KD：held-out 交叉熵与 PPL，**按 token 加权**而不是按 batch 平均
+  （否则一个装着短文档的 batch 会和装着长文档的 batch 等权，数字会随 batch 构成漂移）
+- DPO：**偏好准确率**（policy 排序正确的比例）、隐式奖励 margin，以及 chosen / rejected 各自的
+  奖励变化。要看的是准确率——DPO loss 会在模型只是把已有排序变得更尖锐时继续下降，单看 loss 高估进展
+- GRPO：沿用已有的 `evaluate()`（accuracy / format_rate / hack_rate）
+
+```bash
+python pretrain.py --data_path datasets/prepared/train.jsonl \
+  --val_data_path datasets/prepared/val.jsonl --val_every 200
+```
+
+`swanlab`（`--use_wandb True`）仍然可用且正交，但不再是看曲线的唯一途径。
 
 ## 模型结构由 CLI 决定
 
