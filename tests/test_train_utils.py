@@ -5,7 +5,15 @@ import pytest
 import torch
 import torch.nn as nn
 
-from train_utils import add_common_train_args, flush_pending_grads, init_wandb_if_needed, optimizer_step
+from train_utils import (
+    accelerator_type,
+    add_common_train_args,
+    build_autocast_scaler,
+    flush_pending_grads,
+    init_wandb_if_needed,
+    optimizer_step,
+    resolve_device,
+)
 
 
 def _tiny_model_and_optimizer():
@@ -107,7 +115,7 @@ def test_add_common_train_args_uses_overridden_defaults():
     assert args.max_seq_len == 256
     assert args.data_path == "tests/fixtures/sft_tiny.jsonl"
     assert args.use_wandb is False
-    assert args.device == ("cuda" if torch.cuda.is_available() else "cpu")
+    assert args.device == resolve_device()
 
 
 def test_add_common_train_args_allows_stage_specific_extras():
@@ -119,6 +127,65 @@ def test_add_common_train_args_allows_stage_specific_extras():
 
     assert args.teacher_path == "foo.pth"
     assert args.save_dir == "results"
+
+
+def test_resolve_device_prefers_an_explicit_request():
+    assert resolve_device("cpu") == "cpu"
+    assert resolve_device("cuda:1") == "cuda:1"
+
+
+def test_resolve_device_falls_back_cuda_then_mps_then_cpu(monkeypatch):
+    """Apple Silicon must not silently fall through to cpu: measured on an M5 Pro
+    that costs ~6x on a 100M model."""
+    import train_utils
+
+    def configure(cuda, mps):
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: cuda)
+        monkeypatch.setattr(train_utils, "mps_available", lambda: mps)
+
+    configure(cuda=True, mps=True)
+    assert resolve_device() == "cuda"
+    configure(cuda=False, mps=True)
+    assert resolve_device() == "mps"
+    configure(cuda=False, mps=False)
+    assert resolve_device() == "cpu"
+
+
+def test_accelerator_type_ignores_unavailable_backends(monkeypatch):
+    import train_utils
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(train_utils, "mps_available", lambda: False)
+
+    assert accelerator_type("cuda") is None
+    assert accelerator_type("mps") is None
+    assert accelerator_type("cpu") is None
+
+
+def test_autocast_is_disabled_without_an_accelerator():
+    ctx, scaler = build_autocast_scaler("cpu", "bfloat16")
+    assert scaler is None
+    assert ctx.__class__.__name__ == "nullcontext"
+
+
+@pytest.mark.parametrize("dtype", ["float32", "fp32", "", "float64"])
+def test_no_autocast_for_non_amp_dtypes(dtype):
+    ctx, scaler = build_autocast_scaler("cpu", dtype)
+    assert scaler is None
+    assert ctx.__class__.__name__ == "nullcontext"
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="requires Apple Silicon")
+def test_mps_gets_autocast_and_bf16_gets_no_scaler():
+    """bf16 has fp32's exponent range, so loss scaling is unnecessary — and on MPS
+    fp16 measurably breaks this model's numerics, so bf16 is the recommended path."""
+    ctx, scaler = build_autocast_scaler("mps", "bfloat16")
+    assert scaler is None
+    assert isinstance(ctx, torch.amp.autocast)
+
+    ctx16, scaler16 = build_autocast_scaler("mps", "float16")
+    assert isinstance(ctx16, torch.amp.autocast)
+    assert scaler16 is not None and scaler16.is_enabled()
 
 
 def test_add_common_train_args_can_skip_flags_a_stage_does_not_have():

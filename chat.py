@@ -8,7 +8,13 @@ import os
 import sys
 from transformers import AutoTokenizer
 from model import Whetstone
-from train_utils import add_model_args, describe_model, load_weights, resolve_model_config
+from train_utils import (
+    add_model_args,
+    describe_model,
+    load_weights,
+    resolve_device,
+    resolve_model_config,
+)
 
 # 彩色输出工具类
 class Colors:
@@ -168,7 +174,7 @@ def main():
     # 对话参数
     parser.add_argument('--history_cnt', default=0, type=int,
                        help='保留的历史对话轮数')
-    parser.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu', 
+    parser.add_argument('--device', default=resolve_device(), 
                        type=str, help='运行设备')
     parser.add_argument('--show_prompt', action='store_true',
                        help='显示实际发送给模型的prompt')

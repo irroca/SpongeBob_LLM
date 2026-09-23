@@ -21,12 +21,41 @@ RL 部分不依赖 TRL/veRL：可验证奖励环境、组相对优势、clipped 
 
 ## 环境
 
+需要 **Python 3.12+**（CI 用 3.12）。推荐 `uv`：
+
 ```bash
-# CPU 环境（如无 GPU）建议先装 CPU 版 PyTorch：
-pip install --index-url https://download.pytorch.org/whl/cpu torch
-pip install -r requirements.txt
-python3 -m pytest tests/ -q     # 全部 CPU、无网络、不需要 checkpoint
+uv venv --python 3.12 && source .venv/bin/activate
+uv pip install -r requirements.txt
+HF_HUB_OFFLINE=1 python -m pytest tests/ -q     # 327 passed，无需 GPU / 网络 / checkpoint
 ```
+
+不用 `uv` 的话 `python3.12 -m venv .venv` + `pip install -r requirements.txt` 等效。
+纯 CPU 的 Linux 机器可以先装 CPU wheel 省下载量：
+`pip install --index-url https://download.pytorch.org/whl/cpu torch`。
+
+> **`HF_HUB_OFFLINE=1` 值得一直带着。** 分词器就在仓库里，但 `transformers` 默认每次都会联网
+> 检查更新。实测测试套件从 **47 秒降到 16 秒**，其中只有 4 秒是 CPU 时间——其余全在等网络。
+
+### 设备自动选择：cuda > mps > cpu
+
+`--device` 不传时由 `train_utils.resolve_device()` 决定，**Apple Silicon 会自动走 MPS**。
+在 M5 Pro 上实测（~100M 模型，`dim768 L12`，seq 512，batch 4）：
+
+| 设备 / 精度 | token/s | 相对 CPU |
+|------------|---------|---------|
+| cpu, fp32 | 1,445 | 1.0× |
+| mps, fp32 | 5,717 | 4.0× |
+| **mps, bfloat16** | **9,055** | **6.3×** |
+
+所以 Mac 上的推荐姿势是 `--dtype bfloat16`（设备不用传）：
+
+```bash
+python pretrain.py --data_path ... --dtype bfloat16
+```
+
+**MPS 上别用 fp16。** 同一组实测里 fp16 autocast 把 loss 从 fp32 的 `-0.3278` 变成 `+0.0018`，
+而 bf16 保持 `-0.3276`——fp16 的指数范围扛不住这个模型的注意力路径。bf16 有 fp32 的指数范围，
+也因此**不需要也不会创建 GradScaler**（`build_autocast_scaler` 只为 fp16 建），这不是缺功能。
 
 `tokenizer/zh_6400/` 是**遗留分词器**（BPE，vocab 6400，只在中文语料上训过），保留它是为了让
 CPU 单测和 smoke 跑得起来。它在代码上的压缩率只有 2.23 字符/token，双语 + 代码语料需要

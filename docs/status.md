@@ -125,12 +125,23 @@ padding mask 五种情况，可以直接用来验证两条路径等价）。KV c
 
 ### 3.3 显存与吞吐的实测校准
 
-`docs/corpus-plan.md` 里的「~92 小时」是按 `FLOPs/token ≈ 6N` 加一个假设的 30k token/s 估的，
-**没有在真卡上量过**。小模型常被显存带宽和 kernel launch 限制而不是算力，实测可能在 15k–60k
-之间浮动。
+`docs/corpus-plan.md` 里的「~92 小时」是按 `FLOPs/token ≈ 6N` 加一个假设的 30k token/s 估的。
+**第一组真实测量已经有了**（Apple M5 Pro / 20 核 GPU / 48GB 统一内存，fp32 除非注明）：
 
-先做一件小事：固定 `--dim 768 --n_layers 12`，扫 `--batch_size` 和 `--max_seq_len`，
-记录「不 OOM 的最大组合」和「token/s」，写进 `docs/experiments.md`。这决定后面所有时间预算。
+| 配置 | cpu | mps | mps + bf16 |
+|------|-----|-----|-----------|
+| 29M 消融代理（`dim512 L8`, v6400, seq512, bs8） | 4,574 | 19,631 | — |
+| 100M 目标（`dim768 L12`, v32k, seq512, bs4） | 1,445 | 5,717 | **9,055** |
+| 100M 目标（seq1024, bs2） | 1,202 | 4,974 | — |
+
+按这组数推算：
+
+- **消融在本机可行**：0.4B token 的一组，MPS 上约 5.7 小时，一晚上跑一组；CPU 要 24 小时
+- **正式训练在本机不可行**：10B token 即便 mps+bf16 也要约 **13 天**。租卡的计划不变
+- 假设的 30k token/s 对这台 Mac 明显偏乐观。租到卡之后要**重新量一遍**再排时间
+
+还没量的：`--batch_size` / `--max_seq_len` 的 OOM 边界（本机 48GB 统一内存不紧张，
+8GB 的 5060Ti 或租来的卡才是真约束），以及 §3.2 改成 SDPA 之后的提升。
 
 顺带可以考虑（不阻塞）：gradient checkpointing、`torch.compile`、fused AdamW。
 
@@ -233,17 +244,31 @@ PPO critic、PRM（过程奖励模型）、MoE、多卡并行、推理服务化�
 
 ## 6. 从云端切到本地：环境差异
 
-| | 云端（之前） | 本地（现在） |
-|---|---|---|
-| GPU | 无，`torch.cuda.is_available()` 为 False | RTX 5060Ti 8GB，正式训练租卡 |
-| `--dtype` | 只能 `float32` | 用 `bfloat16`（Blackwell 原生支持，且不需要 GradScaler）|
-| 网络 | 通 HF | 同 |
-| 数据 | `datasets/` 是空的 | 需要重新拉，见 §4 步骤 2–3 |
+| | 云端（之前） | 本地 Mac（现在） | 5060Ti / 租的卡 |
+|---|---|---|---|
+| 加速器 | 无 | **Apple M5 Pro，MPS** | CUDA |
+| `--device` 默认 | `cpu` | **`mps`**（自动选）| `cuda` |
+| `--dtype` | 只能 `float32` | `bfloat16` | `bfloat16` |
+| 数据 | `datasets/` 是空的 | 同，需重新拉（§4 步骤 2–3）| 同 |
+
+本地环境搭建：
+
+```bash
+uv venv --python 3.12 && source .venv/bin/activate
+uv pip install -r requirements.txt
+HF_HUB_OFFLINE=1 python -m pytest tests/ -q     # 327 passed
+```
 
 要注意的几点：
 
+- **一直带上 `HF_HUB_OFFLINE=1`**。分词器就在仓库里，但 `transformers` 默认每次联网检查更新，
+  测试套件因此从 47 秒变 16 秒（其中只有 4 秒是 CPU 时间）
+- **设备自动选择是 cuda > mps > cpu**（`train_utils.resolve_device()`）。Mac 上不用传 `--device`
+- **MPS 上别用 fp16**：实测把 loss 从 fp32 的 `-0.3278` 变成 `+0.0018`，bf16 则是 `-0.3276`。
+  fp16 的指数范围扛不住这个模型的注意力路径
 - **`--dtype float16` 才会启用 GradScaler**，`bfloat16` 不需要也不会启用
   （`build_autocast_scaler` 里的逻辑），别以为是 bug
+- 系统自带的 Python 是 3.9，**跑不了**（`transformers` 5.x 要 3.10+）。必须用 3.12 的 venv
 - **`big_math` 数据集是 gated 的**（auto-approve），要先在 HF 上接受条款并设 `HF_TOKEN`。
   其余五个评测集不需要
 - **磁盘预算**：10B token 的 JSONL 约 30GB，预 tokenize 成 `uint16` 后约 20GB，
