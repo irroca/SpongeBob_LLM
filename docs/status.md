@@ -51,35 +51,33 @@
 
 ---
 
-## 2. PR 状态（⚠️ 合并顺序出过问题，已修好）
+## 2. PR 历史：`main` 已完整，但中间出过一次合并顺序事故
 
-事情的经过，记下来以免困惑：
+**结论先说：`main` 现在是完整的**（PR #4 + #5 + #6 全部落地），直接从 `main` 开工即可。
+
+```bash
+git clone https://github.com/irroca/Whetstone.git && cd Whetstone
+python3 -m pytest tests/ -q      # 应为 318 passed
+```
+
+下面这段记录下来，是因为它是一个很容易再犯一次的坑：
 
 - **PR #4**（Mini-RLVR）以 **squash** 方式合进 `main`
 - **PR #5**（数据管线 + 改名 Whetstone + 架构 CLI）的 base 是 #4 的分支，
   它在 #4 合入 `main` **之后 21 秒**才合进 #4 的分支
-- 结果：`main` 拿到的是 **#5 之前**的树。**PR #5 的全部工作从未到达 `main`**——
-  `main` 上至今还是 `Config.py` / `SFT.py` / `spongebob_tokenizer/`，没有 `datatools/`
+- 结果 `main` 拿到的是 **#5 之前**的树：#5 显示为「已合并」，但它的工作全部滞留在 #4 的分支上，
+  `main` 上还是 `Config.py` / `SFT.py` / `spongebob_tokenizer/`，完全没有 `datatools/`
+- **PR #6** 的分支持有两者的完整线性历史、是 `main` 的严格超集，直接 target `main` 一次补齐
 
-**修复**：PR **#6** 的分支 `cursor/project-handoff-0ed3` 持有两者的完整线性历史，
-是 `main` 的**严格超集**，所以它直接 target `main`，一次合并把缺的全部补上。
-分支里已经把 `main` 合了进来（`-X ours`，因为 squash 造成的 6 个冲突正确解法都是「取本分支」），
-并验证过合并前后树完全一致——`main` 没有任何本分支缺失的内容。
+| PR | 内容 | 状态 |
+|----|------|------|
+| [#4](https://github.com/irroca/Whetstone/pull/4) | Mini-RLVR：可验证奖励环境 + 从零 GRPO | 已合并（squash）|
+| [#5](https://github.com/irroca/Whetstone/pull/5) | 数据管线、架构 CLI、改名 Whetstone | 已合并，但当时**没进 main** |
+| [#6](https://github.com/irroca/Whetstone/pull/6) | 本交接文档 + 补齐 `main` | 已合并 |
 
-| PR | 分支 | 目标 | 状态 |
-|----|------|------|------|
-| [#4](https://github.com/irroca/SpongeBob_LLM/pull/4) | `cursor/mini-rlvr-grpo-9ce6` | `main` | 已合并（squash）|
-| [#5](https://github.com/irroca/SpongeBob_LLM/pull/5) | `cursor/data-tooling-and-model-cli-9ce6` | #4 的分支 | 已合并，但**没进 main** |
-| [#6](https://github.com/irroca/SpongeBob_LLM/pull/6) | `cursor/project-handoff-0ed3` | `main` | 开着，合它即可补齐一切 |
-
-**本地接手的第一件事：合并 #6。** 在那之前，想拿到完整代码请直接 checkout 这个分支：
-
-```bash
-git fetch origin && git checkout cursor/project-handoff-0ed3
-python3 -m pytest tests/ -q      # 应为 318 passed
-```
-
-教训：stacked PR 要么严格按自下而上的顺序合，要么把上层 PR 的 base 直接改成 `main`。
+**教训**：stacked PR 要么严格按自下而上的顺序合，要么在合之前把上层 PR 的 base 直接改成 `main`。
+`squash` 合并会切断祖先关系，所以一旦顺序错了，后续那个 PR 的内容不会自动跟过来，
+而且再合时会因为历史分叉产生一堆「两边都改了同一文件」的假冲突。
 
 ---
 
@@ -283,5 +281,10 @@ PPO critic、PRM（过程奖励模型）、MoE、多卡并行、推理服务化�
    数据源可信度
 3. **租什么卡、租多久？** 取决于 §3.3 的实测结果。如果显存宽裕，`docs/corpus-plan.md` 里
    ~185M / 18B token 的档位也在射程内
-4. **仓库要不要改名**（GitHub 上现在还是 `SpongeBob_LLM`）。代码里已经全部是 Whetstone 了，
-   远端仓库名和 PR 链接里的路径还没改
+
+改名已全部完成：代码、文档、远端仓库都是 **`irroca/Whetstone`**。如果你手上还有指向旧名的
+clone，GitHub 会一直重定向，但建议顺手改掉：
+
+```bash
+git remote set-url origin https://github.com/irroca/Whetstone.git
+```
