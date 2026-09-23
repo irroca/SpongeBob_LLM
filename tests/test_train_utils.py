@@ -93,7 +93,7 @@ def test_add_common_train_args_uses_overridden_defaults():
         parser,
         batch_size=4,
         learning_rate=1e-4,
-        wandb_project="SpongeBob-Distill",
+        wandb_project="Whetstone-Distill",
         log_step=1,
         max_seq_len=256,
         data_path="tests/fixtures/sft_tiny.jsonl",
@@ -102,7 +102,7 @@ def test_add_common_train_args_uses_overridden_defaults():
 
     assert args.batch_size == 4
     assert args.learning_rate == 1e-4
-    assert args.wandb_project == "SpongeBob-Distill"
+    assert args.wandb_project == "Whetstone-Distill"
     assert args.log_step == 1
     assert args.max_seq_len == 256
     assert args.data_path == "tests/fixtures/sft_tiny.jsonl"

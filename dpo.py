@@ -10,20 +10,24 @@ from torch import optim
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 
-from Config import LLMConfig
 from dataset import PreferenceDataset
 from losses import dpo_loss, sequence_logprobs
-from model import SpongeBob
+from model import Whetstone
 from train_utils import (
     add_common_train_args,
+    add_model_args,
     build_autocast_scaler,
+    describe_model,
     flush_pending_grads,
     get_lr,
     init_wandb_if_needed,
     load_train_state,
     load_weights,
     optimizer_step,
+    optimizer_step,
+    resolve_model_config,
     save_checkpoint,
+    save_final_weights,
     set_seed,
 )
 
@@ -102,11 +106,12 @@ def main():
         parser,
         batch_size=2,
         learning_rate=1e-5,
-        wandb_project="SpongeBob-DPO",
+        wandb_project="Whetstone-DPO",
         log_step=1,
         max_seq_len=256,
         data_path="tests/fixtures/preference_tiny.jsonl",
     )
+    add_model_args(parser)
     parser.add_argument("--policy_path", type=str, required=True, help="Init policy (usually SFT)")
     parser.add_argument("--ref_path", type=str, default=None, help="Frozen reference; default=policy_path")
     parser.add_argument("--beta", type=float, default=0.1)
@@ -117,12 +122,15 @@ def main():
     if args.ref_path is None:
         args.ref_path = args.policy_path
 
-    tokenizer = AutoTokenizer.from_pretrained("./spongebob_tokenizer")
-    cfg = LLMConfig(max_seq_len=args.max_seq_len, vocab_size=tokenizer.vocab_size)
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_path)
+    cfg = resolve_model_config(
+        args, tokenizer.vocab_size, checkpoint_path=args.resume_from or args.policy_path
+    )
     args.lm_config = cfg
 
-    policy = SpongeBob(cfg).to(args.device)
-    ref = SpongeBob(cfg).to(args.device)
+    policy = Whetstone(cfg).to(args.device)
+    ref = Whetstone(cfg).to(args.device)
+    print(describe_model(policy, cfg, "policy"))
     load_weights(args.policy_path, policy, args.device, strict=False)
     load_weights(args.ref_path, ref, args.device, strict=False)
     ref.eval()
@@ -157,7 +165,7 @@ def main():
         )
 
     final_path = f"{args.save_dir}/dpo_final.pth"
-    torch.save(policy.state_dict(), final_path)
+    save_final_weights(final_path, policy, args.lm_config)
     print(f"Saved {final_path}")
 
 

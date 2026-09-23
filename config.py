@@ -2,7 +2,7 @@ from transformers import PretrainedConfig
 from typing import List
 
 class LLMConfig(PretrainedConfig):
-     model_type="spongebob"
+     model_type="whetstone"
      def __init__(self,
                   dim:int=512,
                   n_layers: int= 8,

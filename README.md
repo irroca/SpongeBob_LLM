@@ -1,11 +1,20 @@
-# SpongeBob LLM
+# Whetstone
 
-从零实现的 **~29M** Llama 风格解码器语言模型：RoPE、RMSNorm、SwiGLU、可选 GQA、词嵌入/输出层权重共享，并包含完整的 **Pretrain → SFT → Knowledge Distillation → DPO → GRPO/RLVR** 训练与评估流水线。
+> *A whetstone doesn't add metal — it removes what isn't an edge.*
+
+从零实现的中英双语小语言模型，目标能力是**可验证任务**（算术、代码）。全栈自己写，包括数据管线和
+强化学习：**语料构建 → Pretrain → SFT → 知识蒸馏 → DPO → GRPO/RLVR**。
 
 RL 部分不依赖 TRL/veRL：可验证奖励环境、组相对优势、clipped policy loss、k3 KL 全部从零实现，
 并把 Dr. GRPO / DAPO 的几个关键改动做成开关而不是分叉代码，方便做消融。
 
-> 本仓库定位是**可深挖的学习/作品集项目**，不是生产级大模型平台。默认配置约 **29M 参数**（`dim=512, n_layers=8, vocab=6400`），无多卡并行、无推理服务、无量化实现。
+> 本仓库定位是**可深挖的学习/研究项目**，不是生产级大模型平台。无多卡并行、无推理服务、
+> 无量化实现、无 PPO critic。规模刻意做小，为的是把算法和训练现象看清楚。
+
+**当前状态**：算法链路和数据管线完成且有单测覆盖；语料方案已定（见
+[`docs/corpus-plan.md`](docs/corpus-plan.md)），目标模型 ~100M / ~10B token，正式训练尚未开始。
+仓库里的 GRPO 实验结果是 29M 玩具规模的**实现验证**，不是能力声明（见
+[`docs/experiments.md`](docs/experiments.md)）。
 
 ## 环境
 
@@ -13,23 +22,232 @@ RL 部分不依赖 TRL/veRL：可验证奖励环境、组相对优势、clipped 
 # CPU 环境（如无 GPU）建议先装 CPU 版 PyTorch：
 pip install --index-url https://download.pytorch.org/whl/cpu torch
 pip install -r requirements.txt
+python3 -m pytest tests/ -q     # 全部 CPU、无网络、不需要 checkpoint
 ```
 
-分词器已提交在 `spongebob_tokenizer/`（BPE，vocab=6400），一般无需重新训练。
+`tokenizer/zh_6400/` 是**遗留分词器**（BPE，vocab 6400，只在中文语料上训过），保留它是为了让
+CPU 单测和 smoke 跑得起来。它在代码上的压缩率只有 2.23 字符/token，双语 + 代码语料需要
+重训一个 32k 词表的版本（见下文「分词器」一节）。
 
 ## 仓库结构
 
+```text
+config.py  model.py  dataset.py  losses.py  train_utils.py  rollout.py   # 核心库
+pretrain.py  sft.py  distill.py  dpo.py  grpo.py                         # 五个训练阶段
+eval_ppl.py  chat.py  analyze_grpo.py  train_tokenizer.py                # 评估与工具
+datatools/   envs/   configs/   tests/   docs/   tokenizer/
+```
+
 | 路径 | 说明 |
 |------|------|
-| `model.py` / `Config.py` | 模型与配置 |
-| `dataset.py` | Pretrain / SFT / Preference(DPO) 数据 |
-| `train_utils.py` / `losses.py` | 共享训练工具与 CE/KD/DPO/GRPO loss |
-| `envs/` | 可验证奖励环境（RLVR）与数据生成 |
+| `model.py` / `config.py` | 模型与配置（RoPE、RMSNorm、SwiGLU、可选 GQA、权重共享）|
+| `dataset.py` | Pretrain / SFT / Preference(DPO) 数据集与 assistant loss mask |
+| `losses.py` / `train_utils.py` | CE/KD/DPO/GRPO loss；共享训练工具与 CLI |
+| `datatools/` | 语料管线：统计、过滤、去重、去污染、划分、配比编排、评测集拉取 |
+| `envs/` | 可验证奖励环境（RLVR）与各阶段数据生成 |
 | `rollout.py` | GRPO 在线采样：分组 rollout、completion mask、logprob |
-| `pretrain.py` / `SFT.py` / `distill.py` / `dpo.py` / `grpo.py` | 各阶段训练入口 |
-| `eval_ppl.py` / `chat.py` | 困惑度评估与交互式生成 |
-| `tests/` | CPU 单元测试与小型 fixtures |
-| `docs/experiments.md` | 本地 GPU 实验记录模板 |
+| `pretrain.py` / `sft.py` / `distill.py` / `dpo.py` / `grpo.py` | 五个阶段的训练入口 |
+| `eval_ppl.py` / `chat.py` / `analyze_grpo.py` | 困惑度评估、交互式生成、RL 指标分析 |
+| `configs/` | 配比 spec（`mixture_v1.json`）|
+| `docs/corpus-plan.md` | 语料候选清单、许可证、配比与消融计划 |
+| `docs/experiments.md` | 实验协议与已记录的跑批结果 |
+
+## 从零到训练：完整顺序
+
+```bash
+# 1. 拉评测集（去污染要用；不做这步去污染就是空转）
+python3 -m datatools.fetch_evals --decontamination_only --update_spec configs/mixture_v1.json
+
+# 2. 按配比构建语料（拉取 → 过滤 → 去重 → 去污染 → 划分 → manifest）
+python3 -m datatools.prepare configs/mixture_v1.json --out_dir datasets/prepared
+
+# 3. 在清洗后的语料上重训分词器
+python3 train_tokenizer.py --data datasets/prepared/train.jsonl --out tokenizer/v1_32k --vocab_size 32768
+
+# 4. 五个阶段（架构只在第一步声明，后续自动继承）
+python3 pretrain.py --dim 768 --n_layers 12 --n_heads 12 --n_kv_heads 3 \
+  --tokenizer_path tokenizer/v1_32k --data_path datasets/prepared/train.jsonl --save_dir results
+python3 sft.py     --pretrained_path results/pretrain_final.pth --data_path datasets/sft.jsonl
+python3 dpo.py     --policy_path results/sft_final.pth --data_path datasets/preference.jsonl
+python3 grpo.py    --policy_path results/dpo_final.pth --env arithmetic
+```
+
+## 模型结构由 CLI 决定
+
+五个训练脚本加上 `eval_ppl.py` / `chat.py` 都通过 `train_utils.add_model_args` 暴露
+`--dim` / `--n_layers` / `--n_heads` / `--n_kv_heads` / `--hidden_dim` / `--dropout` /
+`--rope_theta` 以及 `--tokenizer_path`，做尺寸消融不需要改源码：
+
+```bash
+python3 pretrain.py --dim 256 --n_layers 6 --n_kv_heads 2 --data_path datasets/pretrain.jsonl
+python3 sft.py --pretrained_path results/pretrain_final.pth   # 架构自动沿用，不必重复声明
+```
+
+`resolve_model_config` 的优先级是 **显式 CLI > checkpoint 记录 > 库默认值**。这一层不只是省参数：
+`load_state_dict(strict=False)` 在形状不匹配时会报错，但对**缺失的键是静默容忍**的——把 6 层的
+checkpoint 加载进 8 层模型，多出来的两层会保持随机初始化且毫无提示。现在这种情况会告警。
+
+- `*_final.pth` 仍然是纯 `state_dict`，但同时会写一个 `*.config.json` sidecar。原因是
+  **`n_heads` 无法从张量形状反推**（`head_dim = dim // n_heads`，所以 `wq` 永远是 `dim × dim`，
+  只有 kv/q 的比例可见）。没有 sidecar 时只能假设 `n_heads` 并告警。
+- checkpoint 的 `vocab_size` 与 tokenizer 不一致会直接报错。**重训 tokenizer 会让旧权重失效**，
+  这一点在换语料时几乎必踩。
+- 因此 `distill.py` 现在能做**真正的跨尺寸蒸馏**：teacher 和 student 各自从自己的 checkpoint
+  解析架构，只要求共享 vocab。
+
+## 数据工具（`datatools/`）
+
+四种数据 schema（`text` / `conversations` / `prompt+chosen+rejected` / `question+answer`）
+全部自动识别，所以没有任何工具需要 `--schema` 参数。
+
+### 一条命令跑完整管线
+
+配比写在 spec 里（见 `configs/mixture_v1.json`），`prepare` 按它执行
+**拉取 → 质量过滤 → 精确去重 → 去污染 → 划分 → manifest**：
+
+```bash
+python3 -m datatools.prepare configs/mixture_v1.json --dry_run          # 先看各源会取多少
+python3 -m datatools.prepare configs/mixture_v1.json --out_dir datasets/prepared
+python3 -m datatools.prepare configs/mixture_v1.json --scale 0.001      # 千分之一预算试跑管线
+```
+
+整条链路是**流式**的：配比按 token 计，而语料按文档和字节发布，所以只能边 tokenize 边记数、
+取满即停。10B token 是约 30GB 文本，任何一步都不能全量进内存。
+
+输出是 `train/val/holdout.jsonl` 加一个 `manifest.json`，后者记录每源实际取到的 token 和文档数、
+**每条过滤规则各拒绝了多少**、去重和去污染的删除量、以及种子。没有这些，配比消融之间无法对账。
+
+报告里两个值得盯的信号：
+
+```text
+source                 target       tokens   fill      docs      read  kept%  tok/doc
+zh_web                 120000        20268   17%       601       653   92%       34
+  ! zh_web ran out of data at 17% of its budget
+```
+
+- `fill < 100%` 且标了 `ran out of data`：这个源被**悄悄降权**了，实际配比已经不是你写的那个
+- `kept%` 是真实的过滤通过率（缓冲区里取进来但没用上的记录会从 `read` 里扣掉，
+  否则一个干净的源会看起来像被过滤掉了大半）
+
+### 单独使用
+
+```bash
+# 语料统计：schema 合法性、长度分位数、语种混合、重复率、单文档重复度、preference 长度偏置
+python3 -m datatools.stats datasets/raw.jsonl --tokenizer ./tokenizer/zh_6400 --json stats.json
+
+# 去重：精确 + MinHash 近重复
+python3 -m datatools.dedup datasets/raw.jsonl --out datasets/clean.jsonl --threshold 0.8
+
+# 去污染：13-gram 重叠 + 可选 LCS 比例（SmolLM2 的做法）
+python3 -m datatools.decontaminate datasets/train.jsonl --out datasets/clean.jsonl \
+  --against datasets/gsm8k.jsonl datasets/math.jsonl --n 13 --lcs_threshold 0.6
+
+# 确定性划分（按内容哈希，重跑一致、语料增长时已有划分不变）
+python3 -m datatools.split datasets/clean.jsonl --out_prefix datasets/v1
+
+# tokenizer 压缩率：算语料的 token 量，以及比较多个候选词表
+python3 -m datatools.tokenizer_stats --probe datasets/zh.jsonl
+python3 -m datatools.tokenizer_stats datasets/zh.jsonl --tokenizer ./tok_16k ./tok_32k
+```
+
+### 各模块的要点
+
+`stats` 报几个直接决定能不能训的东西：
+
+- **malformed 行**按行号报出来并跳过，大 dump 里的一行坏数据不该让整个任务挂掉
+- **repetition_ratio**（单文档内重复的字符 n-gram 占比）能抓出 boilerplate 循环和退化爬虫结果
+- **preference 的长度偏置**：`chosen` 如果系统性更长，DPO 会顺带学到「越长越好」，
+  超过 70% 时会直接告警。这件事一旦开训就看不见了
+
+`filters` 的每条规则返回的是**拒绝原因的名字**而不是布尔值。过滤这一步真正有用的输出不是留下的
+集合，而是**哪条规则删了多少**——一个阈值静默删掉八成语料是 bug，只有归因才看得见。
+阈值故意没有调优：先用 `stats` 看真实分位数，再写进 spec。
+
+`dedup` 的 MinHash 是直接在 numpy 上实现的（不依赖 `datasketch`）：
+
+- shingle 用**字符 n-gram**，因为中文没有空格分词
+- 置换系数做了上界约束，`a*h + b < 2^63`，uint64 不会回绕——这是一个诚实的 universal hash
+  族，而不是依赖溢出行为
+- LSH 只负责挑候选，**每个候选都会用完整签名复核**，所以分带只影响召回和速度，
+  不会引入低于阈值的误判。`--bands` / `--rows` 可以手动调这个权衡
+- **内存上界**：每条存活文档一个签名（128 个置换约 1KB），大约能撑 100–200 万条文档。
+  十亿 token 级别的语料要按源分文件跑，这也是 `prepare` 内联只做流式精确去重的原因
+
+`decontaminate` 是真正的污染检查（`dedup --against` 只做精确 prompt 匹配）：
+
+- 沿用 SmolLM2 的做法：**13-gram 重叠 + 可选 LCS 重叠比例 0.6**。后者用来把巧合撞上的
+  13-gram 判回干净
+- **CJK 需要自己的切分**：按空格切词的 13-gram 在中文里不存在。`text_units` 把每个汉字当
+  一个单元、拉丁/数字连续段当一个词，于是 13-gram 在英文是 13 个词、在中文是 13 个字，
+  两者都约等于一个句子片段
+- 评测项**逐字段单独建索引**，而不是拼成一条。拼接会插入 `=>`、role 前缀这种自然文本里
+  不存在的分隔符，反而让只引用了题干的网页漏过去
+- 短于 13 个单元的评测项按**自身长度**建索引——否则一道 10 个词的题永远匹配不上只会产生
+  13 单元窗口的长网页
+- **已知限制**：极短答案（如 `42`，少于 5 个单元）只能靠精确相等匹配。把任何出现 `42`
+  的文档都判为污染会把语料删空，所以保护主要来自题干。这条在测试里被显式断言，
+  是已知性质而不是意外
+
+`split` 按**内容哈希**划分而不是按位置或打乱的下标，换来两个对消融很重要的性质：重跑结果一致，
+以及语料增长时已有文档不会被重新洗牌（验证曲线跨数据版本仍可比）。`holdout` 是任何阶段都不训的那份。
+
+### 评测集与去污染
+
+```bash
+python3 -m datatools.fetch_evals --all --out_dir datasets/eval
+python3 -m datatools.fetch_evals --decontamination_only --update_spec configs/mixture_v1.json
+```
+
+从 HF 拉取并转成仓库的 `{"question","answer"}` schema，所以同一个文件既能喂
+`datatools.prepare` 的去污染，也能直接给 `grpo.py --eval_path` 当评测集：
+
+| set | 规模 | 用途 |
+|-----|------|------|
+| `gsm8k` | 1319 | 去污染主目标（SmolLM2 用的也是它）+ 评测 |
+| `math500` | 500 | 标准 MATH 评测子集 |
+| `tal_scq5k_cn` / `tal_scq5k_en` | 各 2000 | MIT 许可的中英竞赛数学，唯一干净的中文可验证源 |
+| `mmlu` | 14042 | 只做去污染 |
+| `big_math` | 251k | GRPO 的 prompt 池（gated，需 HF token）|
+
+转换不是直接搬字段：GSM8K 的答案要从 `#### N` 里抽出来、CoT 留在 `solution` 字段；
+TAL-SCQ5K 的 `answer_value` 只是选项字母（`B`），要解析 `answer_option_list` 换成选项**内容**，
+否则不可验证；MMLU 的 `answer` 是下标，要换成选项文本。`solution` 字段会被
+`record_parts` 一起索引——**只抄了解答、没抄题目的网页同样是泄漏**。
+
+`big_math` 保留了 `llama8b_solve_rate`（每题 64 次 rollout 的通过率）。这是做难度课程的关键：
+零奖励是 GRPO 的吸收态（组内全错 → 无奖励方差 → 无梯度），有了通过率就能按难度带筛题，
+而不是靠运气碰方差。
+
+实跑验证：1319 道 GSM8K 索引出 3957 个片段，把三种泄漏形态（原题、只抄解答、题目埋在长网页里）
+各埋一条进 300 篇干净文档，三条全部命中，零误杀。
+
+### 分词器
+
+`tokenizer_stats` 解决两个问题：**语料到底有多少 token**（配比是按 token 算的，而语料是按文档/
+字节发布的），以及**这个词表配不配这份数据**。遗留的 6400 词表实测：
+
+| 领域 | 字符/token | 单字符 token 占比 |
+|------|-----------|------------------|
+| 中文 | 1.40 | 63.3% |
+| 英文 | 4.00 | 14.7% |
+| **代码** | **2.23** | 42.5% |
+
+英文和代码都是 ASCII，代码还更重复，正常词表下代码的压缩率不该差于散文，这里却低了 44%
+（`grpo_advantages` → `gr|p|o|_|ad|v|ant|ages`）。**加代码语料必须重训词表。**
+注意 `single_char_frac` 只能在同一书写系统内比较——中文单字本身就是有意义的单位，
+63% 是正常的，不是碎片化。
+
+重训用 `train_tokenizer.py`，它复用 `datatools.records`，所以分词器看到的文本与训练阶段
+完全一致（包括展平后的对话）：
+
+```bash
+python3 train_tokenizer.py --data datasets/prepared/train.jsonl --out tokenizer/v1_32k --vocab_size 32768
+python3 -m datatools.tokenizer_stats --probe --tokenizer tokenizer/v1_32k tokenizer/zh_6400
+```
+
+**词表大小和模型规模必须一起定**：嵌入层是 `vocab_size × dim`，32k 词表在 29M 模型上占
+39.5% 的参数，在 ~100M（`dim=768, n_layers=12`）上占 25.3%。这也是本项目把模型定在 100M 的原因。
+语料方案（候选清单、许可证坑、配比与消融计划）见 [`docs/corpus-plan.md`](docs/corpus-plan.md)。
 
 ## 快速跑通（CPU smoke）
 
@@ -39,7 +257,7 @@ pip install -r requirements.txt
 python3 pretrain.py --data_path tests/fixtures/pretrain_tiny.jsonl \
   --epochs 1 --batch_size 2 --max_seq_len 128 --save_dir results --device cpu --dtype float32
 
-python3 SFT.py --data_path tests/fixtures/sft_tiny.jsonl \
+python3 sft.py --data_path tests/fixtures/sft_tiny.jsonl \
   --pretrained_path results/pretrain_final.pth \
   --epochs 1 --batch_size 2 --max_seq_len 128 --save_dir results --device cpu --dtype float32
 
@@ -62,7 +280,7 @@ python3 grpo.py --policy_path results/sft_final.pth --env arithmetic \
 python3 eval_ppl.py --model_path results/pretrain_final.pth \
   --dataset_path tests/fixtures/pretrain_tiny.jsonl --max_seq_len 128 --device cpu
 
-printf '海绵宝宝喜欢做什么？\nquit\n' | python3 chat.py \
+printf '磨刀石是用来做什么的？\nquit\n' | python3 chat.py \
   --save_dir results --model_mode 1 --device cpu --max_new_tokens 64
 ```
 
@@ -203,18 +421,18 @@ python3 analyze_grpo.py results_a/grpo_metrics.jsonl results_b/grpo_metrics.json
 
 ## 训练 CLI / wandb（`train_utils.py`）
 
-四个训练入口（`pretrain.py` / `SFT.py` / `distill.py` / `dpo.py`）共享同一套 CLI 参数，由
+四个训练入口（`pretrain.py` / `sft.py` / `distill.py` / `dpo.py`）共享同一套 CLI 参数，由
 `train_utils.add_common_train_args(parser, **overrides)` 统一添加（`--save_dir` / `--epochs` /
 `--batch_size` / `--learning_rate` / `--device` / `--use_wandb` / `--wandb_project` / `--dtype` /
 `--num_workers` / `--accumulation_steps` / `--grad_clip` / `--log_step` / `--save_step` /
 `--max_seq_len` / `--data_path` / `--resume_from` / `--seed`）；每个脚本通过关键字参数覆盖自己的默认值
-（如 `distill.py` 用 `wandb_project="SpongeBob-Distill"`），再 `add_argument` 自己的额外参数
+（如 `distill.py` 用 `wandb_project="Whetstone-Distill"`），再 `add_argument` 自己的额外参数
 （如 `--teacher_path` / `--beta`）。
 
 - `--device` 统一默认 `"cuda" if torch.cuda.is_available() else "cpu"`（四个训练脚本 + `eval_ppl.py` +
-  `chat.py` 一致；此前 `pretrain.py`/`SFT.py`/`distill.py`/`dpo.py` 默认写的是 `"cuda:0"`）。
+  `chat.py` 一致；此前 `pretrain.py`/`sft.py`/`distill.py`/`dpo.py` 默认写的是 `"cuda:0"`）。
 - `--use_wandb True --wandb_project ...`：四个训练脚本现在都支持（`distill.py`/`dpo.py` 是本轮新增，
-  之前只有 `pretrain.py`/`SFT.py` 有）。日志由 `train_utils.init_wandb_if_needed(args, run_name=...)`
+  之前只有 `pretrain.py`/`sft.py` 有）。日志由 `train_utils.init_wandb_if_needed(args, run_name=...)`
   统一处理：`use_wandb=False` 时直接返回 `None`（不 import）；为 `True` 时才 `import swanlab as wandb`
   并 `wandb.init(...)`，随后训练循环里 `if wandb is not None: wandb.log({...})`。`swanlab` 是可选依赖
   （见 `requirements.txt`），未安装时打开 `--use_wandb` 会直接抛 `ModuleNotFoundError`。
@@ -225,14 +443,29 @@ python3 analyze_grpo.py results_a/grpo_metrics.jsonl results_b/grpo_metrics.json
 python3 -m pytest tests/ -q
 ```
 
-## 默认模型配置
+## 模型配置
+
+`config.LLMConfig` 的默认值是遗留的小配置，留作 CPU 测试和消融代理模型用：
 
 ```python
 LLMConfig(dim=512, n_layers=8, n_heads=8, n_kv_heads=8, vocab_size=6400, max_seq_len=1024)
 # ≈ 29M params；设置 n_kv_heads < n_heads 即启用 GQA
 ```
 
-## 已知行为与限制（本轮 solidify 覆盖）
+正式训练的目标配置是 **~99.5M**（词表 32k 下嵌入层占 25.3%，见「分词器」一节）：
+
+```bash
+--dim 768 --n_layers 12 --n_heads 12 --n_kv_heads 3 --max_seq_len 2048
+```
+
+| 配置 | 总参数 | 嵌入占比 |
+|------|--------|---------|
+| `dim=512, L=8`, vocab 6400（默认/代理） | 29.0M | 11.3% |
+| `dim=512, L=8`, vocab 32k | 42.5M | 39.5% |
+| **`dim=768, L=12`, vocab 32k（目标）** | **99.5M** | 25.3% |
+| `dim=960, L=16`, vocab 32k | 184.8M | 17.0% |
+
+## 已知行为与限制
 
 - **`--resume_from` + shuffle 的顺序不保证**：`DataLoader(..., shuffle=True)` 每次重新创建
   `DataLoader`/新进程时都会用不同的打乱顺序（没有固定/可派生的 per-epoch seed），而
@@ -244,7 +477,7 @@ LLMConfig(dim=512, n_layers=8, n_heads=8, n_kv_heads=8, vocab_size=6400, max_seq
   `wrap_pretrain_text` 包上 `bos_token`/`eos_token`（与 `dataset.PretrainDataset` 编码方式一致），
   再 tokenize/padding/truncate 计算困惑度，确保评估输入分布与训练输入分布对齐（旧版本直接对裸文本
   计算，会低估真实 PPL）。
-- **`generate` 支持 batch>1 且逐行独立判断 EOS**：`SpongeBob._stream_generate` 维护一个
+- **`generate` 支持 batch>1 且逐行独立判断 EOS**：`Whetstone._stream_generate` 维护一个
   `finished` 布尔张量，每行各自判断是否已生成 `eos_token_id`；已结束的行从**下一步**开始持续输出
   `pad_token_id`（命中 EOS 当步仍输出真实 EOS token），其余未结束的行继续正常采样，直到全部行
   `finished` 或达到 `max_new_tokens` 才停止整个循环。因此调用方拿到的输出里，已结束的行末尾会有
@@ -260,23 +493,15 @@ LLMConfig(dim=512, n_layers=8, n_heads=8, n_kv_heads=8, vocab_size=6400, max_seq
 - **`--top_p < 1` 时训练数据严格来说是 off-policy 的**：采样分布被截断过，而重要性比用的是
   策略自身分布。默认 `--top_p 1.0` 就是为了避免这个偏差。
 - **GRPO 的 `loss` 不是进度指标**：on-policy 且 `seq_mean` 聚合时它恒等于 0，看 `grad_norm`。
+- **`tokenizer/zh_6400` 只在中文上训过**，代码压缩率 2.23 字符/token。双语 + 代码正式训练前
+  必须重训词表（见「分词器」）。用旧词表训出来的 checkpoint 与新词表**不兼容**，
+  `resolve_model_config` 会在 `vocab_size` 不匹配时直接报错。
+- **`datatools.dedup` 的近重复去重有内存上界**（每条文档约 1KB 签名，约 100–200 万条），
+  所以 `prepare` 内联只做流式精确去重，近重复要按源分文件单独跑。
+- **极短评测答案的去污染保护较弱**（少于 5 个单元时退化为精确匹配）。保护主要来自题干。
 - 无分布式训练、无 FlashAttention 绑定、无服务化 API、无 INT8/INT4、无 PPO critic、无 PRM。
-- fixtures / CPU smoke **不能**代表语言能力；请在自己的 GPU + 真实数据上填 `docs/experiments.md`。
+- fixtures / CPU smoke **不能**代表语言能力；真实数字见 `docs/experiments.md`。
 - 旧版伪「特殊 token 加权蒸馏」已移除，现为真实 KD。
-
-## 简历表述建议（可直接改写）
-
-> 只写你真的跑过的部分。RL 那几条在你自己填完 `docs/experiments.md` 之前不要用。
-
-- 从零实现 ~29M Llama 风格 LM（RoPE / RMSNorm / SwiGLU / 可选 GQA），打通
-  Pretrain→SFT→KD→DPO→GRPO 全栈后训练流水线。
-- 不依赖 TRL/veRL，从零实现 GRPO：组相对优势、clipped 代理目标、k3 KL，
-  并把 Dr. GRPO / DAPO 的优势归一化、token-level loss、clip-higher、dynamic sampling
-  做成可消融开关。
-- 设计规则奖励环境（accuracy + format 双分量），量化 reward hacking（格式对答案错的比例）、
-  零方差组占比与熵坍缩，而不是只报一条 reward 曲线。
-- 修复并单测覆盖 KV-cache 因果 mask、checkpoint 双格式加载、AMP/LR 调度等训练工程问题；
-  RL 侧单测断言微批损失之和等于全批损失、零方差组梯度为零、completion mask 停在各自 EOS。
 
 ## License
 

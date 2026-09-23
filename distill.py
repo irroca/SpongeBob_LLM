@@ -10,20 +10,25 @@ from torch import optim
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 
-from Config import LLMConfig
 from dataset import SFTDataset
 from losses import kd_loss, masked_cross_entropy
-from model import SpongeBob
+from model import Whetstone
 from train_utils import (
+    MODEL_ARCH_FIELDS,
     add_common_train_args,
+    add_model_args,
     build_autocast_scaler,
+    describe_model,
     flush_pending_grads,
     get_lr,
     init_wandb_if_needed,
     load_train_state,
     load_weights,
     optimizer_step,
+    optimizer_step,
+    resolve_model_config,
     save_checkpoint,
+    save_final_weights,
     set_seed,
 )
 
@@ -112,11 +117,12 @@ def main():
         parser,
         batch_size=4,
         learning_rate=1e-4,
-        wandb_project="SpongeBob-Distill",
+        wandb_project="Whetstone-Distill",
         log_step=1,
         max_seq_len=256,
         data_path="tests/fixtures/sft_tiny.jsonl",
     )
+    add_model_args(parser)
     parser.add_argument("--teacher_path", type=str, required=True)
     parser.add_argument("--student_path", type=str, required=True)
     parser.add_argument("--alpha", type=float, default=0.5, help="KD mix weight")
@@ -126,12 +132,24 @@ def main():
     os.makedirs(args.save_dir, exist_ok=True)
     set_seed(args.seed)
 
-    tokenizer = AutoTokenizer.from_pretrained("./spongebob_tokenizer")
-    cfg = LLMConfig(max_seq_len=args.max_seq_len, vocab_size=tokenizer.vocab_size)
-    args.lm_config = cfg
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_path)
+    # Teacher and student get independent architectures resolved from their own
+    # checkpoints; the --dim/--n_layers flags describe the *student* only, since
+    # that is the model being trained. KD across sizes only needs a shared vocab,
+    # which resolve_model_config enforces against the tokenizer.
+    teacher_cfg = resolve_model_config(
+        argparse.Namespace(**{f: None for f in MODEL_ARCH_FIELDS}, max_seq_len=args.max_seq_len),
+        tokenizer.vocab_size,
+        checkpoint_path=args.teacher_path,
+    )
+    args.lm_config = resolve_model_config(
+        args, tokenizer.vocab_size, checkpoint_path=args.resume_from or args.student_path
+    )
 
-    teacher = SpongeBob(cfg).to(args.device)
-    student = SpongeBob(cfg).to(args.device)
+    teacher = Whetstone(teacher_cfg).to(args.device)
+    student = Whetstone(args.lm_config).to(args.device)
+    print(describe_model(teacher, teacher_cfg, "teacher"))
+    print(describe_model(student, args.lm_config, "student"))
 
     load_weights(args.teacher_path, teacher, args.device, strict=False)
     load_weights(args.student_path, student, args.device, strict=False)
@@ -167,7 +185,7 @@ def main():
         )
 
     final_path = f"{args.save_dir}/distill_final.pth"
-    torch.save(student.state_dict(), final_path)
+    save_final_weights(final_path, student, args.lm_config)
     print(f"Saved {final_path}")
 
 

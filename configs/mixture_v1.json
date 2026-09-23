@@ -1,0 +1,137 @@
+{
+  "name": "v1-bilingual-verifiable",
+  "tokenizer": "./tokenizer/zh_6400",
+  "total_tokens": 10000000000,
+  "seed": 0,
+  "val_fraction": 0.005,
+  "holdout_fraction": 0.005,
+  "decontaminate": {
+    "against": [
+      "datasets/eval/gsm8k.jsonl",
+      "datasets/eval/math500.jsonl",
+      "datasets/eval/mmlu.jsonl",
+      "datasets/eval/tal_scq5k_cn.jsonl",
+      "datasets/eval/tal_scq5k_en.jsonl"
+    ],
+    "n": 13,
+    "lcs_threshold": 0.6
+  },
+  "sources": [
+    {
+      "name": "zh_web",
+      "weight": 0.3,
+      "note": "FineWeb2-HQ Chinese: ODC-By, already MinHash-deduplicated upstream",
+      "hf": {
+        "path": "epfml/FineWeb2-HQ",
+        "name": "cmn_Hani",
+        "split": "train"
+      },
+      "text_field": "text",
+      "filters": {
+        "min_chars": 200,
+        "max_chars": 100000,
+        "min_cjk_ratio": 0.5,
+        "max_digit_ratio": 0.3,
+        "max_symbol_ratio": 0.3,
+        "max_repetition": 0.3,
+        "max_duplicate_lines": 0.3
+      }
+    },
+    {
+      "name": "en_web",
+      "weight": 0.28,
+      "note": "FineWeb-Edu: ODC-By, educational-quality classifier threshold 3",
+      "hf": {
+        "path": "HuggingFaceFW/fineweb-edu",
+        "name": "sample-10BT",
+        "split": "train"
+      },
+      "text_field": "text",
+      "filters": {
+        "min_chars": 200,
+        "max_chars": 100000,
+        "min_latin_ratio": 0.5,
+        "max_digit_ratio": 0.3,
+        "max_symbol_ratio": 0.3,
+        "max_repetition": 0.3,
+        "max_duplicate_lines": 0.3,
+        "min_mean_word_length": 3.0,
+        "max_mean_word_length": 10.0
+      }
+    },
+    {
+      "name": "code",
+      "weight": 0.2,
+      "note": "starcoderdata Python: ships file contents, unlike Stack-Edu which is SWHIDs only",
+      "hf": {
+        "path": "bigcode/starcoderdata",
+        "data_dir": "python",
+        "split": "train"
+      },
+      "text_field": "content",
+      "filters": {
+        "min_chars": 100,
+        "max_chars": 60000,
+        "max_digit_ratio": 0.3,
+        "max_symbol_ratio": 0.6,
+        "max_repetition": 0.5,
+        "max_duplicate_lines": 0.5
+      }
+    },
+    {
+      "name": "math",
+      "weight": 0.14,
+      "note": "FineMath4+: ODC-By, 10B tokens, scores 4-5 only",
+      "hf": {
+        "path": "HuggingFaceTB/finemath",
+        "name": "finemath-4plus",
+        "split": "train"
+      },
+      "text_field": "text",
+      "filters": {
+        "min_chars": 100,
+        "max_chars": 100000,
+        "max_digit_ratio": 0.4,
+        "max_symbol_ratio": 0.5,
+        "max_repetition": 0.4,
+        "max_duplicate_lines": 0.4
+      }
+    },
+    {
+      "name": "books",
+      "weight": 0.05,
+      "note": "Common Pile Project Gutenberg: public domain. OCR noise is expected",
+      "hf": {
+        "path": "common-pile/project_gutenberg",
+        "split": "train"
+      },
+      "text_field": "text",
+      "filters": {
+        "min_chars": 1000,
+        "max_chars": 400000,
+        "min_latin_ratio": 0.5,
+        "max_digit_ratio": 0.2,
+        "max_symbol_ratio": 0.2,
+        "max_repetition": 0.4,
+        "max_duplicate_lines": 0.3
+      }
+    },
+    {
+      "name": "synthetic_textbook",
+      "weight": 0.03,
+      "note": "Cosmopedia v2: synthetic textbooks/blogs/stories, 30B tokens",
+      "hf": {
+        "path": "HuggingFaceTB/smollm-corpus",
+        "name": "cosmopedia-v2",
+        "split": "train"
+      },
+      "text_field": "text",
+      "filters": {
+        "min_chars": 200,
+        "max_chars": 100000,
+        "min_latin_ratio": 0.5,
+        "max_repetition": 0.3
+      }
+    }
+  ]
+}

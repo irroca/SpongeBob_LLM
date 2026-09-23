@@ -5,8 +5,8 @@ import tempfile
 import torch
 import torch.nn as nn
 
-from Config import LLMConfig
-from model import SpongeBob
+from config import LLMConfig
+from model import Whetstone
 from train_utils import (
     build_autocast_scaler,
     get_lr,
@@ -53,7 +53,7 @@ def test_scaler_only_for_fp16_on_cuda_device_string():
 def test_load_weights_accepts_raw_and_wrapped_checkpoint():
     set_seed(0)
     cfg = LLMConfig(dim=64, n_layers=1, n_heads=4, n_kv_heads=2, max_seq_len=32, vocab_size=128)
-    model = SpongeBob(cfg)
+    model = Whetstone(cfg)
     opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
     with tempfile.TemporaryDirectory() as td:
         raw_path = os.path.join(td, "raw.pth")
@@ -61,12 +61,12 @@ def test_load_weights_accepts_raw_and_wrapped_checkpoint():
         torch.save(model.state_dict(), raw_path)
         save_checkpoint(ckpt_path, model, opt, None, epoch=1, step=2, global_step=3, loss=0.5, config=cfg)
 
-        model2 = SpongeBob(cfg)
+        model2 = Whetstone(cfg)
         load_weights(raw_path, model2, "cpu", strict=True)
         for p1, p2 in zip(model.parameters(), model2.parameters()):
             assert torch.allclose(p1, p2)
 
-        model3 = SpongeBob(cfg)
+        model3 = Whetstone(cfg)
         ckpt = load_weights(ckpt_path, model3, "cpu", strict=True)
         assert "model_state_dict" in ckpt
         epoch, step, global_step, loss = load_train_state(ckpt, opt, None)

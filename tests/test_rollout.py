@@ -2,11 +2,11 @@ import pytest
 import torch
 from transformers import AutoTokenizer
 
-from Config import LLMConfig
+from config import LLMConfig
 from envs import ArithmeticEnv
 from envs.base import Reward, Task
 from losses import token_logprobs
-from model import SpongeBob
+from model import Whetstone
 from rollout import (
     build_prompt_ids,
     collate_rollouts,
@@ -25,7 +25,7 @@ EOS, PAD = 2, 0
 
 
 def _tokenizer():
-    return AutoTokenizer.from_pretrained("./spongebob_tokenizer")
+    return AutoTokenizer.from_pretrained("./tokenizer/zh_6400")
 
 
 def _tiny_model(vocab_size=10, **kwargs):
@@ -34,7 +34,7 @@ def _tiny_model(vocab_size=10, **kwargs):
         vocab_size=vocab_size, dropout=0.0,
     )
     defaults.update(kwargs)
-    return SpongeBob(LLMConfig(**defaults)).eval()
+    return Whetstone(LLMConfig(**defaults)).eval()
 
 
 def _rollout(prompt, completion, mask, rewards=None):

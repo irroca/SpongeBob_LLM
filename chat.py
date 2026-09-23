@@ -7,9 +7,8 @@ import warnings
 import os
 import sys
 from transformers import AutoTokenizer
-from model import SpongeBob
-from Config import LLMConfig
-from train_utils import load_weights
+from model import Whetstone
+from train_utils import add_model_args, describe_model, load_weights, resolve_model_config
 
 # 彩色输出工具类
 class Colors:
@@ -32,7 +31,7 @@ def colored_text(text, color):
 def init_model(args):
     """初始化模型和分词器"""
     try:
-        tokenizer = AutoTokenizer.from_pretrained('./spongebob_tokenizer')
+        tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_path)
         
         # 根据模型模式选择对应的checkpoint
         model_files = {
@@ -73,19 +72,14 @@ def init_model(args):
         
         print(colored_text(f"加载模型: {ckp_path}", Colors.GREEN))
         
-        # 初始化模型配置
-        model_config = LLMConfig(
-            max_seq_len=args.max_seq_len,
-            vocab_size=tokenizer.vocab_size
-        )
+        # 架构取自 checkpoint 自身，否则换了模型尺寸就会静默加载出半随机初始化的模型
+        model_config = resolve_model_config(args, tokenizer.vocab_size, checkpoint_path=ckp_path)
         
-        model = SpongeBob(model_config)
+        model = Whetstone(model_config)
         load_weights(ckp_path, model, args.device, strict=False)
         model = model.eval().to(args.device)
         
-        # 计算参数量
-        total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        print(colored_text(f"模型参数量: {total_params / 1e6:.2f}M", Colors.CYAN))
+        print(colored_text(describe_model(model, model_config), Colors.CYAN))
         
         return model, tokenizer
         
@@ -151,7 +145,7 @@ def streaming_generation(model, tokenizer, prompt, args):
         return ""
 
 def main():
-    parser = argparse.ArgumentParser(description="SpongeBob模型交互式对话")
+    parser = argparse.ArgumentParser(description="Whetstone模型交互式对话")
     
     # 模型参数
     parser.add_argument('--save_dir', default='results', type=str, 
@@ -178,11 +172,12 @@ def main():
                        type=str, help='运行设备')
     parser.add_argument('--show_prompt', action='store_true',
                        help='显示实际发送给模型的prompt')
-    
+    add_model_args(parser)
+
     args = parser.parse_args()
     
     # 打印配置信息
-    print(colored_text("=== SpongeBob模型对话系统 ===", Colors.BOLD + Colors.CYAN))
+    print(colored_text("=== Whetstone模型对话系统 ===", Colors.BOLD + Colors.CYAN))
     print(colored_text(f"设备: {args.device}", Colors.YELLOW))
     print(colored_text(f"模型模式: {['预训练', 'SFT聊天', '蒸馏', 'DPO', 'GRPO'][args.model_mode]}", Colors.YELLOW))
     print(colored_text("输入 'quit' 或 'exit' 退出对话", Colors.YELLOW))
@@ -203,7 +198,7 @@ def main():
             
             # 退出条件
             if user_input.lower() in ['quit', 'exit', '退出']:
-                print(colored_text("感谢使用SpongeBot对话系统！", Colors.CYAN))
+                print(colored_text("感谢使用Whetstone对话系统！", Colors.CYAN))
                 break
             if not user_input:
                 continue
