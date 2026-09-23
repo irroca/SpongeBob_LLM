@@ -1,7 +1,9 @@
 __pycache__/
 *.pyc
 results/
+results_*/
 datasets/
 *.pth
+*.jsonl.bak
 eval_result.json
 ppl_results.json

@@ -7,7 +7,7 @@ import math
 import os
 import random
 from contextlib import nullcontext
-from typing import Any, Optional, Tuple
+from typing import Any, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -76,17 +76,23 @@ def optimizer_step(
     optimizer: optim.Optimizer,
     scaler: Any,
     grad_clip: float,
-) -> None:
-    """Unscale (if scaler), clip grad norm, step, update, zero_grad."""
+) -> float:
+    """Unscale (if scaler), clip grad norm, step, update, zero_grad.
+
+    Returns the pre-clip gradient norm. GRPO needs it: its on-policy loss value
+    is uninformative (see README), so the gradient norm is what shows whether
+    an update carried any signal.
+    """
     if scaler is not None:
         scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
         scaler.step(optimizer)
         scaler.update()
     else:
-        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
         optimizer.step()
     optimizer.zero_grad(set_to_none=True)
+    return float(grad_norm)
 
 
 def flush_pending_grads(
@@ -198,31 +204,44 @@ def add_common_train_args(
     resume_from: Optional[str] = None,
     seed: int = 1337,
     wandb_project: str = "SpongeBob",
+    skip: Sequence[str] = (),
 ) -> argparse.ArgumentParser:
-    """Add the CLI flags shared by every training entry point (pretrain/SFT/distill/dpo).
+    """Add the CLI flags shared by every training entry point (pretrain/SFT/distill/dpo/grpo).
 
     Each script passes its own defaults via keyword args (e.g. ``learning_rate``,
     ``wandb_project``, ``data_path``) and then adds any stage-specific extras
     (``--pretrained_path``, ``--teacher_path``, ``--beta``, ...) after calling this.
     ``--device`` always defaults to ``"cuda"`` if a GPU is available, else ``"cpu"``.
+
+    ``skip`` drops flags that make no sense for a stage rather than letting it
+    define its own copy: GRPO is driven by ``--rl_steps`` over env-sampled
+    prompts, so it has no epochs and no DataLoader-style gradient accumulation.
     """
-    parser.add_argument("--save_dir", type=str, default=save_dir)
-    parser.add_argument("--epochs", type=int, default=epochs)
-    parser.add_argument("--batch_size", type=int, default=batch_size)
-    parser.add_argument("--learning_rate", type=float, default=learning_rate)
-    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--use_wandb", type=str2bool, default=False)
-    parser.add_argument("--wandb_project", type=str, default=wandb_project)
-    parser.add_argument("--dtype", type=str, default=dtype)
-    parser.add_argument("--num_workers", type=int, default=num_workers)
-    parser.add_argument("--accumulation_steps", type=int, default=accumulation_steps)
-    parser.add_argument("--grad_clip", type=float, default=grad_clip)
-    parser.add_argument("--log_step", type=int, default=log_step)
-    parser.add_argument("--save_step", type=int, default=save_step)
-    parser.add_argument("--max_seq_len", type=int, default=max_seq_len)
-    parser.add_argument("--data_path", type=str, default=data_path)
-    parser.add_argument("--resume_from", type=str, default=resume_from)
-    parser.add_argument("--seed", type=int, default=seed)
+    common = {
+        "save_dir": dict(type=str, default=save_dir),
+        "epochs": dict(type=int, default=epochs),
+        "batch_size": dict(type=int, default=batch_size),
+        "learning_rate": dict(type=float, default=learning_rate),
+        "device": dict(type=str, default="cuda" if torch.cuda.is_available() else "cpu"),
+        "use_wandb": dict(type=str2bool, default=False),
+        "wandb_project": dict(type=str, default=wandb_project),
+        "dtype": dict(type=str, default=dtype),
+        "num_workers": dict(type=int, default=num_workers),
+        "accumulation_steps": dict(type=int, default=accumulation_steps),
+        "grad_clip": dict(type=float, default=grad_clip),
+        "log_step": dict(type=int, default=log_step),
+        "save_step": dict(type=int, default=save_step),
+        "max_seq_len": dict(type=int, default=max_seq_len),
+        "data_path": dict(type=str, default=data_path),
+        "resume_from": dict(type=str, default=resume_from),
+        "seed": dict(type=int, default=seed),
+    }
+    unknown = [name for name in skip if name not in common]
+    if unknown:
+        raise ValueError(f"skip contains unknown common args: {unknown}")
+    for name, kwargs in common.items():
+        if name not in skip:
+            parser.add_argument(f"--{name}", **kwargs)
     return parser
 
 

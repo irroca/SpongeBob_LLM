@@ -74,6 +74,19 @@ def test_optimizer_step_clips_grad_norm():
     assert model.weight.grad is None
 
 
+def test_optimizer_step_returns_pre_clip_grad_norm():
+    """GRPO logs this because its on-policy loss value is ~0 by construction."""
+    model, optimizer = _tiny_model_and_optimizer()
+    x = torch.randn(8, 4) * 100
+    model(x).sum().backward()
+    expected = float(model.weight.grad.norm())
+
+    reported = optimizer_step(model, optimizer, scaler=None, grad_clip=0.5)
+
+    assert reported == pytest.approx(expected, rel=1e-5)
+    assert reported > 0.5  # pre-clip value, not the clipped one
+
+
 def test_add_common_train_args_uses_overridden_defaults():
     parser = argparse.ArgumentParser()
     add_common_train_args(
@@ -106,6 +119,26 @@ def test_add_common_train_args_allows_stage_specific_extras():
 
     assert args.teacher_path == "foo.pth"
     assert args.save_dir == "results"
+
+
+def test_add_common_train_args_can_skip_flags_a_stage_does_not_have():
+    """GRPO is driven by --rl_steps over env-sampled prompts, so it has no epochs."""
+    parser = argparse.ArgumentParser()
+    add_common_train_args(parser, skip=("epochs", "accumulation_steps"))
+    parser.add_argument("--rl_steps", type=int, default=20)
+
+    args = parser.parse_args([])
+
+    assert not hasattr(args, "epochs")
+    assert not hasattr(args, "accumulation_steps")
+    assert args.rl_steps == 20
+    assert args.save_dir == "results"
+
+
+def test_add_common_train_args_rejects_unknown_skip():
+    parser = argparse.ArgumentParser()
+    with pytest.raises(ValueError):
+        add_common_train_args(parser, skip=("not_a_flag",))
 
 
 def test_init_wandb_if_needed_returns_none_when_disabled():
