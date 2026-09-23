@@ -477,6 +477,9 @@ def add_common_train_args(
     save_step: int = 1000,
     max_seq_len: int = 512,
     data_path: str = "datasets/pretrain.jsonl",
+    val_data_path: str = "",
+    val_every: int = 200,
+    val_batches: int = 20,
     resume_from: Optional[str] = None,
     seed: int = 1337,
     wandb_project: str = "Whetstone",
@@ -509,6 +512,14 @@ def add_common_train_args(
         "save_step": dict(type=int, default=save_step),
         "max_seq_len": dict(type=int, default=max_seq_len),
         "data_path": dict(type=str, default=data_path),
+        "val_data_path": dict(
+            type=str,
+            default=val_data_path,
+            help="Held-out JSONL. Training loss is not comparable across data "
+                 "mixtures; this is what an ablation should be judged on",
+        ),
+        "val_every": dict(type=int, default=val_every, help="Optimizer steps between evaluations"),
+        "val_batches": dict(type=int, default=val_batches, help="Cap batches per evaluation; 0 = all"),
         "resume_from": dict(type=str, default=resume_from),
         "seed": dict(type=int, default=seed),
     }
@@ -519,6 +530,31 @@ def add_common_train_args(
         if name not in skip:
             parser.add_argument(f"--{name}", **kwargs)
     return parser
+
+
+def build_val_loader(dataset_cls, args, tokenizer, **dataset_kwargs):
+    """DataLoader over ``--val_data_path``, or ``None`` when none was given.
+
+    Never shuffled: the evaluation set must be identical between runs and
+    between evaluations within a run, or the curve measures the sampler.
+    """
+    from torch.utils.data import DataLoader
+
+    path = getattr(args, "val_data_path", "")
+    if not path or not os.path.exists(path):
+        return None
+    dataset = dataset_cls(path, tokenizer, max_length=args.max_seq_len, **dataset_kwargs)
+    return DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=getattr(args, "num_workers", 0),
+    )
+
+
+def should_evaluate(global_step: int, args: Any) -> bool:
+    val_every = getattr(args, "val_every", 0)
+    return bool(val_every) and global_step > 0 and global_step % val_every == 0
 
 
 def init_wandb_if_needed(args: Any, run_name: Optional[str] = None) -> Any:
