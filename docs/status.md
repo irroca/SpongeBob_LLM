@@ -51,17 +51,35 @@
 
 ---
 
-## 2. 待合并的 PR
+## 2. PR 状态（⚠️ 合并顺序出过问题，已修好）
+
+事情的经过，记下来以免困惑：
+
+- **PR #4**（Mini-RLVR）以 **squash** 方式合进 `main`
+- **PR #5**（数据管线 + 改名 Whetstone + 架构 CLI）的 base 是 #4 的分支，
+  它在 #4 合入 `main` **之后 21 秒**才合进 #4 的分支
+- 结果：`main` 拿到的是 **#5 之前**的树。**PR #5 的全部工作从未到达 `main`**——
+  `main` 上至今还是 `Config.py` / `SFT.py` / `spongebob_tokenizer/`，没有 `datatools/`
+
+**修复**：PR **#6** 的分支 `cursor/project-handoff-0ed3` 持有两者的完整线性历史，
+是 `main` 的**严格超集**，所以它直接 target `main`，一次合并把缺的全部补上。
+分支里已经把 `main` 合了进来（`-X ours`，因为 squash 造成的 6 个冲突正确解法都是「取本分支」），
+并验证过合并前后树完全一致——`main` 没有任何本分支缺失的内容。
 
 | PR | 分支 | 目标 | 状态 |
 |----|------|------|------|
-| [#4](https://github.com/irroca/Whetstone/pull/4) | `cursor/mini-rlvr-grpo-9ce6` | `main` | ready for review，CI 绿 |
-| [#5](https://github.com/irroca/Whetstone/pull/5) | `cursor/data-tooling-and-model-cli-9ce6` | `#4` 的分支 | ready for review，CI 绿 |
+| [#4](https://github.com/irroca/SpongeBob_LLM/pull/4) | `cursor/mini-rlvr-grpo-9ce6` | `main` | 已合并（squash）|
+| [#5](https://github.com/irroca/SpongeBob_LLM/pull/5) | `cursor/data-tooling-and-model-cli-9ce6` | #4 的分支 | 已合并，但**没进 main** |
+| [#6](https://github.com/irroca/SpongeBob_LLM/pull/6) | `cursor/project-handoff-0ed3` | `main` | 开着，合它即可补齐一切 |
 
-**#5 叠在 #4 上**，所以顺序是先合 #4 再合 #5。也可以把 #5 的 base 改成 `main`（#4 的提交已在
-#5 的历史里，改完 #5 含全部 16 个 commit，#4 会自动关闭）。
+**本地接手的第一件事：合并 #6。** 在那之前，想拿到完整代码请直接 checkout 这个分支：
 
-**本地新 session 的第一件事就是决定怎么合这两个 PR**，后续所有工作都建立在它们之上。
+```bash
+git fetch origin && git checkout cursor/project-handoff-0ed3
+python3 -m pytest tests/ -q      # 应为 318 passed
+```
+
+教训：stacked PR 要么严格按自下而上的顺序合，要么把上层 PR 的 base 直接改成 `main`。
 
 ---
 
