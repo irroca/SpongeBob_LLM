@@ -68,9 +68,9 @@
 
 | PR | 分支 | 目标 | 状态 |
 |----|------|------|------|
-| [#4](https://github.com/irroca/SpongeBob_LLM/pull/4) | `cursor/mini-rlvr-grpo-9ce6` | `main` | 已合并（squash）|
-| [#5](https://github.com/irroca/SpongeBob_LLM/pull/5) | `cursor/data-tooling-and-model-cli-9ce6` | #4 的分支 | 已合并，但**没进 main** |
-| [#6](https://github.com/irroca/SpongeBob_LLM/pull/6) | `cursor/project-handoff-0ed3` | `main` | 开着，合它即可补齐一切 |
+| [#4](https://github.com/irroca/Whetstone/pull/4) | `cursor/mini-rlvr-grpo-9ce6` | `main` | 已合并（squash）|
+| [#5](https://github.com/irroca/Whetstone/pull/5) | `cursor/data-tooling-and-model-cli-9ce6` | #4 的分支 | 已合并，但**没进 main** |
+| [#6](https://github.com/irroca/Whetstone/pull/6) | `cursor/project-handoff-0ed3` | `main` | 开着，合它即可补齐一切 |
 
 **本地接手的第一件事：合并 #6。** 在那之前，想拿到完整代码请直接 checkout 这个分支：
 
@@ -283,5 +283,10 @@ PPO critic、PRM（过程奖励模型）、MoE、多卡并行、推理服务化�
    数据源可信度
 3. **租什么卡、租多久？** 取决于 §3.3 的实测结果。如果显存宽裕，`docs/corpus-plan.md` 里
    ~185M / 18B token 的档位也在射程内
-4. **仓库要不要改名**（GitHub 上现在还是 `SpongeBob_LLM`）。代码里已经全部是 Whetstone 了，
-   远端仓库名和 PR 链接里的路径还没改
+
+改名已经完成：代码、文档和远端仓库都是 `irroca/Whetstone`。如果你的本地 clone 还指向旧的
+`SpongeBob_LLM`，GitHub 会一直重定向，但建议顺手改掉：
+
+```bash
+git remote set-url origin https://github.com/irroca/Whetstone.git
+```
