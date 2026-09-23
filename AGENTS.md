@@ -40,12 +40,19 @@ rather than duplicating commands here.
 
 ### Environment / running caveats (non-obvious)
 
-- **`--device` auto-selects**: `cuda` when `torch.cuda.is_available()` else `cpu`, everywhere
-  (all five training scripts, `eval_ppl.py`, `chat.py`). On a CPU-only box a harmless
-  `GradScaler ... CUDA is not available. Disabling.` warning is expected.
+- **Python 3.12+ and a venv are required** (the system Python on macOS is 3.9, which
+  `transformers` 5.x will not run on). `uv venv --python 3.12 && uv pip install -r requirements.txt`.
+- **Always set `HF_HUB_OFFLINE=1`.** The tokenizer is committed, but `transformers` still phones
+  home to check for updates on every load: the suite takes 47s without it and 16s with it, of
+  which only ~4s is CPU.
+- **`--device` auto-selects `cuda` > `mps` > `cpu`** via `train_utils.resolve_device()`, in all
+  five training scripts plus `eval_ppl.py` and `chat.py`. Do not reintroduce a bare
+  `"cuda" if torch.cuda.is_available() else "cpu"` default — that silently costs ~6x on Apple
+  Silicon (measured: 1.4k token/s on cpu vs 9.1k on mps+bf16 for a 100M model).
 - **Only `--dtype float16` enables GradScaler.** `bfloat16` needs no loss scaling and will not
-  create one (see `build_autocast_scaler`) — that is intended, not a missing feature. Prefer
-  `bfloat16` on any modern GPU.
+  create one (see `build_autocast_scaler`) — that is intended, not a missing feature.
+- **Use bf16, not fp16, on MPS.** Measured on an M5 Pro, fp16 autocast moved a 100M model's loss
+  from -0.3278 to +0.0018 while bf16 held at -0.3276.
 - **Two things will break at real scale and have not been fixed** (details and suggested designs
   in `docs/status.md` §3): `dataset.py` reads an entire JSONL into a Python list, and
   `model.py` materializes the full `(B, heads, q_len, kv_len)` attention score matrix instead of

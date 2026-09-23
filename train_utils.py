@@ -40,21 +40,67 @@ def set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
+_AMP_DTYPES = {
+    "float16": torch.float16,
+    "fp16": torch.float16,
+    "bfloat16": torch.bfloat16,
+    "bf16": torch.bfloat16,
+}
+
+
+def mps_available() -> bool:
+    backend = getattr(torch.backends, "mps", None)
+    return bool(backend and backend.is_available())
+
+
+def resolve_device(preferred: Optional[str] = None) -> str:
+    """Pick an accelerator: explicit request > cuda > mps > cpu.
+
+    Apple Silicon is worth auto-selecting: measured on an M5 Pro, a ~100M model
+    trains at 5.7k token/s on ``mps`` against 1.4k on ``cpu``, and 9.1k with
+    bf16 autocast. Falling back to ``cpu`` there silently costs ~6x.
+    """
+    if preferred:
+        return preferred
+    if torch.cuda.is_available():
+        return "cuda"
+    if mps_available():
+        return "mps"
+    return "cpu"
+
+
+def accelerator_type(device: str) -> Optional[str]:
+    """``"cuda"`` / ``"mps"`` for a usable accelerator, else ``None``."""
+    if "cuda" in device and torch.cuda.is_available():
+        return "cuda"
+    if device.startswith("mps") and mps_available():
+        return "mps"
+    return None
+
+
 def build_autocast_scaler(device: str, dtype: str):
     """Return (autocast_context, GradScaler|None).
 
-    GradScaler is only used for fp16 on CUDA. bf16 does not need loss scaling.
+    GradScaler exists to keep fp16 gradients from underflowing, so it is only
+    created for fp16. bf16 has fp32's exponent range and needs no scaling —
+    that is why ``--dtype bfloat16`` correctly produces no scaler.
+
+    **Prefer bf16 over fp16 on MPS.** Measured on an M5 Pro with a 100M model,
+    fp16 autocast moved the loss from -0.3278 to +0.0018 while bf16 held at
+    -0.3276; fp16's narrow exponent range does not survive this model's
+    attention path on that backend.
     """
     dtype = dtype.lower()
-    use_cuda = "cuda" in device and torch.cuda.is_available()
-    if use_cuda and dtype in ("float16", "fp16", "bfloat16", "bf16"):
-        amp_dtype = torch.float16 if dtype in ("float16", "fp16") else torch.bfloat16
-        ctx = torch.amp.autocast("cuda", dtype=amp_dtype)
-    else:
-        ctx = nullcontext()
+    backend = accelerator_type(device)
+    amp_dtype = _AMP_DTYPES.get(dtype)
 
-    use_scaler = use_cuda and dtype in ("float16", "fp16")
-    scaler = torch.amp.GradScaler("cuda", enabled=use_scaler) if use_scaler else None
+    ctx = (
+        torch.amp.autocast(backend, dtype=amp_dtype)
+        if backend and amp_dtype is not None
+        else nullcontext()
+    )
+    use_scaler = backend is not None and amp_dtype is torch.float16
+    scaler = torch.amp.GradScaler(backend, enabled=True) if use_scaler else None
     return ctx, scaler
 
 
@@ -452,7 +498,7 @@ def add_common_train_args(
         "epochs": dict(type=int, default=epochs),
         "batch_size": dict(type=int, default=batch_size),
         "learning_rate": dict(type=float, default=learning_rate),
-        "device": dict(type=str, default="cuda" if torch.cuda.is_available() else "cpu"),
+        "device": dict(type=str, default=resolve_device()),
         "use_wandb": dict(type=str2bool, default=False),
         "wandb_project": dict(type=str, default=wandb_project),
         "dtype": dict(type=str, default=dtype),

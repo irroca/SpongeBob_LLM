@@ -6,7 +6,13 @@ import numpy as np
 from tqdm import tqdm
 from transformers import AutoTokenizer
 from model import Whetstone
-from train_utils import add_model_args, describe_model, load_weights, resolve_model_config
+from train_utils import (
+    add_model_args,
+    describe_model,
+    load_weights,
+    resolve_device,
+    resolve_model_config,
+)
 
 def json_converter(obj):
     if isinstance(obj, np.generic):  # numpy.float32, numpy.int64 等
@@ -171,7 +177,7 @@ def main():
                        help="Batch size for evaluation")
     parser.add_argument('--max_samples', type=int, default=None,
                        help="Maximum number of samples to evaluate (for testing)")
-    parser.add_argument('--device', type=str, default="cuda" if torch.cuda.is_available() else "cpu",
+    parser.add_argument('--device', type=str, default=resolve_device(),
                        help="Device to use for evaluation")
     parser.add_argument('--output_file', default = 'eval_result.json',type=str, 
                        help="File to save evaluation results")
