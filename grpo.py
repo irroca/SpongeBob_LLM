@@ -38,6 +38,7 @@ from losses import (
     zero_variance_groups,
 )
 from model import Whetstone
+from runlog import RunRecorder
 from rollout import (
     build_prompt_ids,
     collate_rollouts,
@@ -281,9 +282,38 @@ def main():
         f"std_norm={args.normalize_advantage_std} filter_zero_var={args.filter_zero_variance}"
     )
 
+    recorder = RunRecorder.start(
+        "grpo", args, config=args.lm_config, model=policy,
+        data_paths=[p for p in (args.data_path, args.eval_path) if p],
+        extra={
+            "rl_env": args.env,
+            "grpo": {
+                "group_size": args.group_size, "aggregation": args.aggregation,
+                "kl_coeff": args.kl_coeff, "clip_eps_low": args.clip_eps_low,
+                "clip_eps_high": args.clip_eps_high,
+                "normalize_advantage_std": args.normalize_advantage_std,
+                "filter_zero_variance": args.filter_zero_variance,
+            },
+        },
+    )
+    print(f"run: {recorder.run_dir}")
+
     def write_record(record: dict) -> None:
+        # Kept alongside the run directory: analyze_grpo.py reads this path, and
+        # metrics files from earlier runs stay readable.
         with open(metrics_path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+        # Train and eval go in as separate rows. A step that happens to carry an
+        # evaluation still has its rollout metrics, and folding both into one
+        # "val" row would file reward/kl/entropy under the held-out split.
+        step = record.get("step", 0)
+        train = {k: v for k, v in record.items() if k != "step" and not k.startswith("eval_")}
+        if train:
+            recorder.log(step, split="train", **train)
+        evaluated = {k[len("eval_"):]: v for k, v in record.items() if k.startswith("eval_")}
+        if evaluated:
+            recorder.log_eval(step, **evaluated)
         if wandb is not None:
             wandb.log(record)
 
@@ -348,6 +378,10 @@ def main():
                 )
             )
 
+        # Completion tokens, not prompt tokens: the prompt is re-read every
+        # rollout, so counting it would make throughput look better than it is.
+        recorder.add_tokens(sum(int(r.completion_mask.sum()) for r in rollouts))
+
         record["sec"] = round(time.time() - started, 2)
         if args.eval_every and (step % args.eval_every == 0 or step == args.rl_steps):
             record.update(evaluate(policy, tokenizer, env, eval_tasks, args))
@@ -376,7 +410,8 @@ def main():
 
     final_path = f"{args.save_dir}/grpo_final.pth"
     save_final_weights(final_path, policy, args.lm_config)
-    print(f"Saved {final_path}; metrics -> {metrics_path}")
+    recorder.finish(status="completed", steps=args.rl_steps)
+    print(f"Saved {final_path}; metrics -> {metrics_path}; run -> {recorder.run_dir}")
 
 
 if __name__ == "__main__":

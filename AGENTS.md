@@ -126,6 +126,23 @@ rather than duplicating commands here.
     field name changes upstream rather than loosening the converter. **A mixture spec with an
     empty `decontaminate.against` silently checks nothing**, so run `fetch_evals
     --decontamination_only --update_spec <spec>` before `prepare`.
+- **Every stage records its run to `{save_dir}/runs/{run_id}/`** via `runlog.RunRecorder`
+ (`meta.json` / `metrics.jsonl` / `summary.json`). Review with `analyze_runs.py`
+ (`list` / `show` / `compare` / `plot`). No tracker service is involved; `swanlab` stays optional
+ and orthogonal.
+  - `meta.json` deliberately records the git commit, dirty flag and input-file fingerprints. A
+    curve with no record of which data and commit produced it cannot be reviewed — don't drop
+    them to "simplify".
+  - Pass stage-specific metadata through `extra=`, which is **namespaced under `meta["extra"]`**.
+    It used to be merged at the top level, and `grpo.py` passing `extra={"env": ...}` silently
+    overwrote the recorded environment with a string.
+  - `metrics.jsonl` is flushed per row so a killed run keeps its points, and `read_run` tolerates
+    a truncated final line. Log train and eval as **separate rows**; folding an evaluation into
+    the same row as the step's training metrics files reward/kl/entropy under the held-out split.
+- **Held-out metrics come from `evaluate.py`**, wired through `--val_data_path` / `--val_every` /
+ `--val_batches`. `evaluate_lm` is token-weighted, not batch-averaged, so the number does not
+ drift with batch composition. For DPO watch `accuracy`, not loss: DPO loss keeps falling while
+ the model merely sharpens an ordering it already had.
 - **Common training CLI flags come from `train_utils.add_common_train_args(parser, **overrides)`**
  (`--save_dir`, `--epochs`, `--batch_size`, `--learning_rate`, `--device`, `--use_wandb`,
  `--wandb_project`, `--dtype`, `--num_workers`, `--accumulation_steps`, `--grad_clip`, `--log_step`,
