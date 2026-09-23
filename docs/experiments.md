@@ -47,7 +47,7 @@ This template is for **local GPU runs** with real data. The cloud/CPU smoke on `
 
 ```bash
 python pretrain.py --data_path datasets/pretrain.jsonl --device cuda:0 --dtype bfloat16 ...
-python SFT.py --pretrained_path results/pretrain_final.pth --device cuda:0 --dtype bfloat16 ...
+python sft.py --pretrained_path results/pretrain_final.pth --device cuda:0 --dtype bfloat16 ...
 python distill.py --teacher_path results/sft_final.pth --student_path results/sft_final.pth --device cuda:0 ...
 python dpo.py --policy_path results/sft_final.pth --device cuda:0 ...
 python grpo.py --policy_path results/sft_final.pth --device cuda:0 --dtype bfloat16 ...
@@ -125,9 +125,9 @@ python3 -m envs.generate_data --split sft  --n 300 --out datasets/arith1_sft.jso
 python3 -m envs.generate_data --split eval --n 40  --out datasets/arith1_eval.jsonl --seed 777 --max_digits 1
 
 # strong cold start (run A) / weak cold start (runs B, C)
-python3 SFT.py --data_path datasets/arith1_sft.jsonl --epochs 4 --batch_size 16 --learning_rate 5e-4 \
+python3 sft.py --data_path datasets/arith1_sft.jsonl --epochs 4 --batch_size 16 --learning_rate 5e-4 \
   --max_seq_len 128 --save_dir results_1d   --device cpu --dtype float32
-python3 SFT.py --data_path datasets/arith1_sft.jsonl --epochs 1 --batch_size 16 --learning_rate 3e-4 \
+python3 sft.py --data_path datasets/arith1_sft.jsonl --epochs 1 --batch_size 16 --learning_rate 3e-4 \
   --max_seq_len 128 --save_dir results_weak --device cpu --dtype float32
 
 python3 grpo.py --policy_path <sft_final.pth> --env_max_digits 1 --rl_steps 150 \

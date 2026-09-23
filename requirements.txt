@@ -1,4 +1,4 @@
-# SpongeBob LLM dependencies
+# Whetstone dependencies
 # NOTE: For a CPU-only environment (e.g. Cursor Cloud VMs without a GPU), install torch
 # from the CPU wheel index first:
 #   pip install --index-url https://download.pytorch.org/whl/cpu torch

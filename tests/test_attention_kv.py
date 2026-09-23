@@ -1,14 +1,14 @@
 import torch
 import pytest
 
-from Config import LLMConfig
-from model import SpongeBob
+from config import LLMConfig
+from model import Whetstone
 
 
 def _tiny_model(**kwargs):
     defaults = dict(dim=64, n_layers=2, n_heads=4, n_kv_heads=2, max_seq_len=64, vocab_size=128, dropout=0.0)
     defaults.update(kwargs)
-    return SpongeBob(LLMConfig(**defaults))
+    return Whetstone(LLMConfig(**defaults))
 
 
 @torch.no_grad()
